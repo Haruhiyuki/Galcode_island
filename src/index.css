@@ -1,0 +1,45 @@
+@import "tailwindcss";
+@config "../tailwind.config.js";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-app-bg: var(--app-bg);
+  --color-app-surface: var(--app-surface);
+  --color-app-text: var(--app-text);
+  --color-app-muted: var(--app-muted);
+}
+
+:root {
+  color-scheme: light;
+  --app-bg: #f5efdf;
+  --app-surface: rgb(255 255 255 / 0.72);
+  --app-text: #141414;
+  --app-muted: #525252;
+}
+
+.dark {
+  color-scheme: dark;
+  --app-bg: #2f3338;
+  --app-surface: rgb(24 24 27 / 0.68);
+  --app-text: #fafafa;
+  --app-muted: #a1a1aa;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+body {
+  background: transparent;
+  color: var(--app-text);
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}

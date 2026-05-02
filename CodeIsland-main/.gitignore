@@ -1,0 +1,31 @@
+# Build artifacts
+.build/
+.swiftpm/
+
+# Superpowers artifacts
+.superpowers/
+HANDOFF.md
+docs/superpowers/
+
+# macOS system files
+.DS_Store
+
+# IDE vscode/cursor
+.vscode/
+.cursor/
+
+# Tmp files
+*.log
+*.tmp
+dev.sh
+
+# Android watch app
+android-watch/.gradle/
+android-watch/local.properties
+android-watch/**/build/
+
+# Code agents config files
+.agents/
+.claude/
+skills-lock.json
+CLAUDE.md

@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+# Local tools and docs
+.claude/
+技术路径.txt
