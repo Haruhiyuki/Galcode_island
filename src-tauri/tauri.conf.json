@@ -12,9 +12,15 @@
   "app": {
     "windows": [
       {
-        "title": "galcode_island",
-        "width": 800,
-        "height": 600
+        "label": "main",
+        "title": "凉宫春日 AI 桌宠",
+        "width": 440,
+        "height": 680,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true
       }
     ],
     "security": {
