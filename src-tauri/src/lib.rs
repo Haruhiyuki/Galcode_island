@@ -11,7 +11,30 @@ use ipc::commands::{
     get_session_logs, launch_agent, respond_permission, select_project_folder, set_click_through,
     start_agent, stop_agent, translate_only,
 };
+use std::path::Path;
 use std::sync::Arc;
+
+fn load_dotenv_files() {
+    let repo_dotenv = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(|root| root.join(".env"));
+    if let Some(ref path) = repo_dotenv {
+        if path.is_file() {
+            match dotenvy::from_filename(path) {
+                Ok(_) => log::info!("已加载 .env: {}", path.display()),
+                Err(e) => log::warn!(
+                    "未能解析仓库根目录 .env（{}）：{}。若含 Windows 路径请使用正斜杠 D:/path/to/opencode-cli.exe",
+                    path.display(),
+                    e
+                ),
+            }
+        }
+    }
+    match dotenvy::dotenv() {
+        Ok(p) => log::info!("已加载工作目录 .env: {}", p.display()),
+        Err(_) => log::debug!("当前工作目录无 .env 或为空，已跳过"),
+    }
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -29,6 +52,7 @@ impl AppState {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = env_logger::try_init();
+    load_dotenv_files();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())

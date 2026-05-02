@@ -27,6 +27,7 @@ pub fn start_agent(
     state: State<Arc<AppState>>,
     user_input_zh: String,
     cwd: Option<String>,
+    selected_agent: Option<String>,
 ) -> Result<LaunchResult, String> {
     let cwd = cwd.unwrap_or_else(|| ".".to_string());
     let prev = {
@@ -36,7 +37,37 @@ pub fn start_agent(
     if let Some(sid) = prev {
         let _ = manager::stop_session(app.clone(), Arc::clone(state.inner()), sid);
     }
+<<<<<<< Updated upstream
     manager::launch_demo_agent(app, Arc::clone(state.inner()), cwd, user_input_zh)
+=======
+
+    let backend = match selected_agent
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some("opencode") => "opencode".to_string(),
+        Some("claude-code") => {
+            return Err("Claude Code / CodeIsland 尚未接入，请先选择 OpenCode".into());
+        }
+        Some(other) => {
+            return Err(format!("不支持的 Agent 类型: {other}"));
+        }
+        None => std::env::var("GALCODE_AGENT_BACKEND")
+            .unwrap_or_else(|_| "opencode".into())
+            .to_lowercase(),
+    };
+
+    match backend.as_str() {
+        "demo" => manager::launch_demo_agent(app, Arc::clone(state.inner()), cwd, user_input_zh),
+        "opencode" => {
+            manager::launch_opencode_agent(app, Arc::clone(state.inner()), cwd, user_input_zh)
+        }
+        other => Err(format!(
+            "未知的 Agent 后端 {other}（支持 demo | opencode）；或未传 selectedAgent 时由 GALCODE_AGENT_BACKEND 指定"
+        )),
+    }
+>>>>>>> Stashed changes
 }
 
 #[tauri::command]

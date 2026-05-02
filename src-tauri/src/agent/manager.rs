@@ -1,5 +1,10 @@
+<<<<<<< Updated upstream
 use super::config::preset_demo;
 use super::launcher::{resolve_demo_script, spawn_demo_process};
+=======
+use super::config::{opencode_agent_config, preset_demo};
+use super::launcher::{resolve_demo_script, spawn_demo_process, spawn_opencode_process};
+>>>>>>> Stashed changes
 use crate::hook::event::HookEvent;
 use crate::ipc::events::{self, SessionCompletePayload};
 use crate::llm::{
@@ -167,6 +172,93 @@ pub fn launch_demo_agent(
             stdout,
             trimmed,
             llm,
+<<<<<<< Updated upstream
+=======
+            StdoutAgentKind::Demo,
+        );
+    });
+
+    Ok(LaunchResult {
+        session_id,
+        status: AgentStatus::Running,
+    })
+}
+
+pub fn launch_opencode_agent(
+    app: AppHandle,
+    state: Arc<AppState>,
+    cwd: String,
+    task_zh: String,
+) -> Result<LaunchResult, String> {
+    let trimmed = task_zh.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("任务内容不能为空".into());
+    }
+
+    let llm = load_llm_config();
+    let task_for_agent = match &llm {
+        Some(cfg) => translate_zh_to_en(cfg, &trimmed).unwrap_or_else(|_| trimmed.clone()),
+        None => trimmed.clone(),
+    };
+
+    let cwd_path = PathBuf::from(&cwd);
+    let cfg = opencode_agent_config(&app);
+
+    let mut child = spawn_opencode_process(&cfg, &cwd_path, &task_for_agent).map_err(|e| {
+        format!(
+            "{}。提示：可设置环境变量 OPENCODE_BIN 或 GALCODE_OPENCODE_BIN，或在应用配置目录创建 opencode_executable.txt（单行 OpenCode CLI 绝对路径），或在项目根目录使用 .env。",
+            e
+        )
+    })?;
+    let pid = child.id();
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "无法读取 OpenCode stdout".to_string())?;
+
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let sess = AgentSession::new(session_id.clone(), "opencode".into(), Some(cwd.clone()));
+    {
+        let mut sn = sess.snapshot.lock().map_err(|e| e.to_string())?;
+        sn.pid = Some(pid);
+        sn.last_user_prompt = Some(trimmed.clone());
+        sn.status = AgentStatus::Running;
+    }
+    {
+        let mut slot = sess.child.lock().map_err(|e| e.to_string())?;
+        *slot = Some(child);
+    }
+
+    {
+        let mut mgr = state.manager.lock().map_err(|e| e.to_string())?;
+        mgr.active_demo_session = Some(session_id.clone());
+        mgr.sessions.insert(session_id.clone(), sess);
+    }
+
+    let _ = app.emit(
+        "agent://status-changed",
+        events::StatusChangedPayload {
+            session_id: session_id.clone(),
+            status: AgentStatus::Running,
+            tool_name: None,
+            tool_description: Some("OpenCode agent started".into()),
+            percent: Some(0.0),
+        },
+    );
+
+    let app_handle = app.clone();
+    let state_clone = Arc::clone(&state);
+    let sid = session_id.clone();
+    std::thread::spawn(move || {
+        run_stdout_loop(
+            app_handle,
+            state_clone,
+            sid.clone(),
+            stdout,
+            trimmed,
+            llm,
+            StdoutAgentKind::OpenCode,
+>>>>>>> Stashed changes
         );
     });
 
