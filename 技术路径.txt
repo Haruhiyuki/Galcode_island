@@ -1,0 +1,484 @@
+ Galcode_island 前端架构蓝图
+
+  ▎ 阅读说明：本文档供 Cursor 开发时作为路径参照，不做代码编写，只做架构拆解、技术决策、组件划分和状态定义。
+
+  ---
+  一、前端技术路径与技术栈
+
+  1. 核心运行时
+
+  ┌──────────┬──────────────────────────────────┬────────────────────────────────────────────────────────────────────────────────────────────────┐
+  │   层面   │               选型               │                                              理由                                              │
+  ├──────────┼──────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ 桌面壳   │ Tauri v2 (已就位)                │ 对比 Electron，体积小 10x+，Rust 后端天然适合进程管理与 CLI 调用                               │
+  ├──────────┼──────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ 视图层   │ React 19 + Vite 7 (已就位)       │ 已搭建完毕；生态成熟，组件化能力强                                                             │
+  ├──────────┼──────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ 类型系统 │ TypeScript（建议迁移）           │ 当前为 .jsx，建议全部升级为 .tsx。Agent 状态机、IPC 接口、事件类型复杂，无类型后期维护成本极高 │
+  ├──────────┼──────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ 语言     │ 全部代码使用中文注释和中文UI文案 │ 目标用户群体为中文用户                                                                         │
+  └──────────┴──────────────────────────────────┴────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+  2. 推荐新增依赖
+
+  状态管理    →  zustand ^5.x        (轻量、无 boilerplate、Tauri 社区广泛使用)
+  动画        →  framer-motion ^11.x (GIF 切换过渡、气泡弹出/消失、人物弹性动画)
+  样式        →  Tailwind CSS ^4.x   (配合 Vite 零配置启动，快速出视觉)
+  系统托盘    →  @tauri-apps/api/tray (Tauri v2 原生托盘 API，无需额外插件)
+  窗口控制    →  @tauri-apps/api/window + @tauri-apps/api/webviewWindow
+  IPC 通信    →  @tauri-apps/api/core (invoke) + @tauri-apps/api/event (listen/emit)
+
+  3. 可选增强
+
+  ┌───────────────────────────┬────────────────────────────────────────────┐
+  │            库             │                    用途                    │
+  ├───────────────────────────┼────────────────────────────────────────────┤
+  │ react-markdown            │ 聊天气泡中渲染 Markdown 格式的 Agent 总结  │
+  ├───────────────────────────┼────────────────────────────────────────────┤
+  │ lucide-react              │ 图标库 (打开文件夹、Agent 选择、状态指示)  │
+  ├───────────────────────────┼────────────────────────────────────────────┤
+  │ @tauri-apps/plugin-dialog │ 打开本地文件夹选择对话框                   │
+  ├───────────────────────────┼────────────────────────────────────────────┤
+  │ @tauri-apps/plugin-fs     │ 前端直接读取文件 (如需读取 Agent 输出日志) │
+  └───────────────────────────┴────────────────────────────────────────────┘
+
+  4. 参考项目技术决策总结
+
+  ┌──────────────────────┬─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+  │       参考项目       │                                                       关键借鉴点                                                        │
+  ├──────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ CodeIsland-main      │ Agent 状态机设计 (idle/processing/waitingApproval/...)、事件路由模式 (permission→question→event)、Session Snapshot 结构 │
+  ├──────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ BongoCat-master      │ Tauri v2 透明窗口配置、系统托盘实现、Pinia 状态管理模式(映射为 Zustand)、窗口隐藏替代关闭                               │
+  ├──────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ xsun_desktop_pet-dev │ Tauri + React 多窗口架构、GIF 桌宠交互、气泡菜单、IPC 事件通信                                                          │
+  └──────────────────────┴─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+  ---
+  二、前端组件架构树 (Component Tree)
+
+  App.tsx                                    ← 顶层路由(根据 window.label 分派视图)
+  │
+  ├── WelcomeView.tsx                        ← 初始化欢迎界面 (首次启动/非激活状态)
+  │   ├── LogoAnimation.tsx                  ←   项目 Logo 入场动画
+  │   └── QuickStartGuide.tsx                ←   快速引导提示
+  │
+  ├── MainView.tsx                           ← 主面板 (核心交互界面)
+  │   │
+  │   ├── ControlBar.tsx                     ← 顶部操作区
+  │   │   ├── FolderPicker.tsx               ←   [按钮] 打开本地项目文件夹
+  │   │   ├── AgentSelector.tsx              ←   [下拉菜单] Agent 选择 (Claude Code, OpenCode...)
+  │   │   └── LaunchButton.tsx               ←   [按钮] 启动 Agent (调用 Rust IPC)
+  │   │
+  │   ├── StatusMonitor.tsx                  ← 中部状态监控区
+  │   │   ├── AgentStatusBadge.tsx           ←   当前 Agent 状态徽章 (thinking/running/idle/error)
+  │   │   ├── TodoProgress.tsx               ←   To-Do 进度列表 (从 Agent 实时接收)
+  │   │   │   └── TodoItem.tsx               ←     单条任务项 (状态 + 描述)
+  │   │   └── LogStream.tsx                  ←   单条日志流 (最新日志滚动展示)
+  │   │
+  │   ├── PetCharacter.tsx                   ← 下方左侧：人物视觉层
+  │   │   ├── CharacterGif.tsx               ←   GIF 动图渲染 (根据状态机切换)
+  │   │   └── AnimationController.tsx        ←   状态→GIF 映射状态机
+  │   │
+  │   └── ChatBubble.tsx                     ← 下方右侧：对话气泡层
+  │       ├── BubbleContainer.tsx            ←   气泡容器 (定位/动画)
+  │       ├── BubbleContent.tsx              ←   气泡内容 (Markdown 渲染)
+  │       └── EmotionFeedback.tsx            ←   情绪价值反馈文本
+  │
+  └── SettingsView.tsx                       ← 设置面板 (可选,后期阶段)
+      ├── AgentConfigPanel.tsx               ←   Agent 路径配置
+      ├── AppearancePanel.tsx                ←   外观设置
+      └── AboutPanel.tsx                     ←   关于信息
+
+  组件职责速查
+
+  ┌───────────────┬──────────────────────────────────────────────────┬────────────────────────────────────────┐
+  │     组件      │                     核心职责                     │           关键 Props / Hooks           │
+  ├───────────────┼──────────────────────────────────────────────────┼────────────────────────────────────────┤
+  │ App.tsx       │ 根据 window.label 路由到 WelcomeView 或 MainView │ getCurrentWindow().label               │
+  ├───────────────┼──────────────────────────────────────────────────┼────────────────────────────────────────┤
+  │ ControlBar    │ 汇聚顶部所有操作入口，通过 IPC 与 Rust 通信      │ invoke("launch_agent", { agent, cwd }) │
+  ├───────────────┼──────────────────────────────────────────────────┼────────────────────────────────────────┤
+  │ StatusMonitor │ 订阅 Agent 状态事件，展示实时进度与日志          │ listen("agent://status", ...)          │
+  ├───────────────┼──────────────────────────────────────────────────┼────────────────────────────────────────┤
+  │ PetCharacter  │ 维护角色动画状态机，根据 Agent 状态切换 GIF      │ 内部 useAnimationState(status)         │
+  ├───────────────┼──────────────────────────────────────────────────┼────────────────────────────────────────┤
+  │ ChatBubble    │ 展示 LLM 总结与情绪反馈，支持入场/退场动画       │ framer-motion AnimatePresence          │
+  └───────────────┴──────────────────────────────────────────────────┴────────────────────────────────────────┘
+
+  ---
+  三、核心数据状态 (State)
+
+  3.1 全局状态 (Zustand Store)
+
+  // store/useAppStore.ts — 全局应用状态
+  interface AppState {
+    // === 窗口管理 ===
+    currentView: 'welcome' | 'main' | 'settings'
+    windowConfig: {
+      alwaysOnTop: boolean
+      clickThrough: boolean       // 点击穿透 (休眠模式)
+      opacity: number             // 0.0 ~ 1.0
+    }
+
+    // === Agent 管理 ===
+    selectedAgent: 'claude-code' | 'opencode' | 'codex' | 'gemini' | 'cursor' | null
+    agentStatus: AgentStatus      // idle | starting | running | thinking | waitingApproval | completed | error
+    projectPath: string | null    // 用户选择的本地项目路径
+
+    // === 任务状态 ===
+    todos: TodoItem[]             // Agent 当前任务列表
+    currentTool: string | null    // 当前正在执行的工具名 (Bash/Read/Edit/...)
+    toolDescription: string | null // 当前工具的详细描述
+
+    // === 日志 ===
+    logEntries: LogEntry[]        // 最近 N 条日志
+
+    // === 对话 ===
+    currentSummary: string | null // 最近一次任务的 LLM 总结
+    emotionText: string | null    // 情绪反馈文案
+
+    // === Actions ===
+    setAgent: (agent: string) => void
+    setProjectPath: (path: string) => void
+    updateAgentStatus: (status: AgentStatus, metadata?: AgentMetadata) => void
+    updateTodos: (todos: TodoItem[]) => void
+    appendLog: (entry: LogEntry) => void
+    setSummary: (text: string, emotion: string) => void
+  }
+
+  3.2 Agent 状态机枚举 (参考 CodeIsland-main)
+
+  // types/agent.ts
+  type AgentStatus =
+    | 'idle'              // 空闲等待
+    | 'starting'          // 正在启动 Agent 进程
+    | 'running'           // Agent 进程已启动，等待首条 hook 事件
+    | 'thinking'          // Agent 正在思考 (LLM 推理中)
+    | 'processing'        // 正在执行某个工具 (Bash/Read/Edit 等)
+    | 'waitingApproval'   // 等待用户审批 (PermissionRequest)
+    | 'completed'         // 当前任务完成
+    | 'error'             // 发生错误
+
+  // 人物 GIF 映射表 (状态 → GIF 文件路径)
+  const STATUS_GIF_MAP: Record<AgentStatus, string> = {
+    idle:              '/pet/idle.gif',
+    starting:          '/pet/waking.gif',
+    running:           '/pet/ready.gif',
+    thinking:          '/pet/thinking.gif',
+    processing:        '/pet/working.gif',
+    waitingApproval:   '/pet/question.gif',
+    completed:         '/pet/happy.gif',
+    error:             '/pet/sad.gif',
+  }
+
+  3.3 IPC 事件通道设计 (前端 ↔ Rust 双向)
+
+  // 前端 → Rust (invoke)
+  invoke('select_project_folder')               // → 打开系统文件夹选择器,返回路径
+  invoke('launch_agent', { agent, cwd })        // → Rust 启动 Agent 子进程
+  invoke('stop_agent', { sessionId })           // → 停止 Agent
+  invoke('respond_permission', { decision })    // → 回复权限审批 (allow/deny)
+  invoke('read_agent_logs', { sessionId })      // → 读取 Agent 的输出日志
+
+  // Rust → 前端 (emit/listen)
+  listen('agent://status-changed', (e) => {})   // ← 状态变化: idle/thinking/processing...
+  listen('agent://tool-update', (e) => {})      // ← 工具执行开始: { tool, description }
+  listen('agent://tool-result', (e) => {})      // ← 工具执行结果: { success, output }
+  listen('agent://todo-update', (e) => {})      // ← 任务列表更新
+  listen('agent://permission-request', (e) => {})) // ← 权限审批请求
+  listen('agent://session-complete', (e) => {}) // ← 任务完成: { summary, emotion }
+  listen('agent://log', (e) => {})              // ← 单条日志
+  listen('agent://error', (e) => {})            // ← 错误信息
+
+  3.4 关键数据类型
+
+  interface TodoItem {
+    id: string
+    content: string
+    status: 'pending' | 'in_progress' | 'completed' | 'error'
+  }
+
+  interface LogEntry {
+    timestamp: number
+    level: 'info' | 'warn' | 'error'
+    message: string
+    toolName?: string
+  }
+
+  interface AgentMetadata {
+    sessionId?: string
+    toolName?: string
+    toolDescription?: string
+    cwd?: string
+  }
+
+  interface PermissionRequest {
+    sessionId: string
+    toolName: string
+    toolDescription: string
+    rawInput: Record<string, any>
+  }
+
+  ---
+  四、分阶段开发步骤 (Phases)
+
+  Phase 1 — 骨架与透明窗口 (预计 1-2 日)
+
+  目标：将 Tauri 窗口配置为透明无边框、替换 React 模板代码、搭建组件目录。
+
+  Tauri 配置修改 (tauri.conf.json)：
+  - transparent: true, decorations: false, shadow: false
+  - alwaysOnTop: true, skipTaskbar: true
+  - 参考 BongoCat 的配置结构
+
+  前端工作：
+  1. 安装新依赖：zustand, framer-motion, tailwindcss
+  2. 将 src/ 内文件从 .jsx 升级为 .tsx
+  3. 建立目录结构：
+  src/
+    components/       (所有 UI 组件)
+      control-bar/
+      status-monitor/
+      pet-character/
+      chat-bubble/
+      welcome/
+    stores/           (Zustand stores)
+      useAppStore.ts
+    hooks/            (自定义 hooks)
+      useAgentIPC.ts
+      useAnimationState.ts
+    types/            (TypeScript 类型定义)
+      agent.ts
+      ipc.ts
+    assets/
+      pet/            (GIF 动图资源)
+  4. 实现 App.tsx 的 window.label 路由分发 (参考 xsun_desktop_pet)
+  5. 搭建 WelcomeView 和 MainView 的空壳布局
+
+  交付物：透明无边框窗口 + 欢迎界面 + 主面板空壳。
+
+  ---
+  Phase 2 — 操作控制台 (预计 1-2 日)
+
+  目标：实现顶部操作区，连通 Rust IPC 基础通道。
+
+  前端组件：
+  - ControlBar.tsx — 顶部操作栏
+  - FolderPicker.tsx — 调用 @tauri-apps/plugin-dialog 打开文件夹选择
+  - AgentSelector.tsx — 下拉菜单，支持 Claude Code / OpenCode / Codex / Gemini / Cursor
+  - LaunchButton.tsx — 调用 invoke("launch_agent", ...)
+
+  Rust 后端 (配合 Cursor 编写)：
+  - 新增 select_project_folder 命令 → 调用 tauri-plugin-dialog
+  - 新增 launch_agent 命令 → std::process::Command 启动 Agent CLI
+  - 新增 stop_agent 命令 → 杀死子进程
+
+  交互流程：
+  [FolderPicker] → invoke('select_project_folder') → Rust dialog → 返回路径到前端
+  [AgentSelector] → 更新 zustand store.selectedAgent
+  [LaunchButton] → invoke('launch_agent', { agent: 'claude-code', cwd: '/path' })
+                 → Rust spawn 子进程 → emit('agent://status-changed', 'starting')
+
+  交付物：可打开文件夹、选择 Agent、点击启动 → Rust 侧能启动子进程并向前端 emit 状态。
+
+  ---
+  Phase 3 — 状态监控系统 (预计 2-3 日)
+
+  目标：实时接收 Agent 状态、工具调用、Todo 进度，在 UI 上展示。
+
+  核心 Hook: useAgentIPC.ts
+  // 集中监听所有 agent:// 事件，分派到 zustand store
+  function useAgentIPC() {
+    useEffect(() => {
+      const unlistens = [
+        listen('agent://status-changed', handleStatusChange),
+        listen('agent://tool-update', handleToolUpdate),
+        listen('agent://todo-update', handleTodoUpdate),
+        listen('agent://log', handleLog),
+        listen('agent://session-complete', handleComplete),
+      ]
+      return () => { unlistens.forEach(fn => fn.then(u => u())) }
+    }, [])
+  }
+
+  前端组件：
+  - StatusMonitor.tsx — 监控区容器
+  - AgentStatusBadge.tsx — 状态徽章 (带颜色+图标的状态指示器)
+  - TodoProgress.tsx — 任务进度列表
+  - LogStream.tsx — 最新日志滚动展示
+
+  Rust 后端关键逻辑 (参考 CodeIsland-main 的 HookServer 模式)：
+  - 监听 Agent 子进程的 stdout/stderr
+  - 解析 Agent 输出的 hook 事件 (JSON 格式)
+  - 事件路由：PreToolUse → agent://tool-update、PostToolUse → agent://tool-result、Notification → agent://log 等
+  - 将 Agent 输出通过 app_handle.emit(...) 推送到前端
+
+  交付物：启动 Agent 后，前端能实时看到状态变化、工具调用进度、日志流。
+
+  ---
+  Phase 4 — 人物视觉层 (预计 1-2 日)
+
+  目标：实现人物 GIF 动图 + 状态机切换动画。
+
+  前端组件：
+  - PetCharacter.tsx — 人物容器 (固定在下半部分左侧)
+  - CharacterGif.tsx — GIF 图片渲染 (<img> 标签，根据状态切换 src)
+  - AnimationController.tsx — 状态机逻辑 (监听 agentStatus 变化)
+
+  状态机映射 (扩展自 3.2 节)：
+  idle              → idle.gif          (呼吸/待机动画)
+  starting          → waking.gif        (苏醒/启动)
+  running           → ready.gif         (就绪/等待)
+  thinking          → thinking.gif      (思考中，如摸下巴、转圈)
+  processing        → working.gif       (工作中，如敲键盘)
+  waitingApproval   → question.gif      (疑问/等待中)
+  completed         → happy.gif         (开心/庆祝)
+  error             → sad.gif           (失落/错误)
+
+  过渡动画 (framer-motion)：使用 AnimatePresence + motion.img 实现 GIF 切换时的淡入淡出效果。
+
+  额外细节：
+  - 窗口拖拽：在人物图片上绑定 onPointerDown/onPointerMove → window.startDragging() (参考 xsun_desktop_pet)
+  - 双击交互：双击人物 → 显示/隐藏控制台
+
+  交付物：人物 GIF 随 Agent 状态自动切换，带过渡动画，支持拖拽窗口。
+
+  ---
+  Phase 5 — 对话气泡层 (预计 1-2 日)
+
+  目标：Agent 任务完成后展示 LLM 总结 + 情绪反馈。
+
+  前端组件：
+  - ChatBubble.tsx — 气泡外层 (定位在人物右侧)
+  - BubbleContainer.tsx — 气泡容器 (带定位算法，避免遮挡人物)
+  - BubbleContent.tsx — Markdown 内容渲染
+  - EmotionFeedback.tsx — 情绪文字 (如 "任务完成！你很棒~ 🎉")
+
+  气泡触发逻辑：
+  agent://session-complete 事件到达
+    → updateAgentStatus('completed')
+    → setSummary(summaryText, emotionText)
+    → 人物切换到 happy.gif
+    → 气泡弹出 (framer-motion 从 scale(0) 弹入)
+    → 10 秒后或用户点击其他地方，气泡自动收起
+
+  气泡内容格式 (由 Rust/后端 LLM 处理)：
+  ## 任务完成 ✅
+  - 修改了 3 个文件
+  - 新增了 `useAuth` hook
+  - 修复了登录页面的样式问题
+
+  > 你今天的效率很高，继续保持！
+
+  交付物：任务完成后气泡自动弹出，展示总结内容，带弹性动画，自动消失。
+
+  ---
+  Phase 6 — 系统托盘与窗口管理 (预计 1 日)
+
+  目标：系统托盘菜单、窗口显示/隐藏、设置面板。
+
+  功能：
+  - 系统托盘图标 (参考 BongoCat 的 useTray.ts)
+  - 托盘菜单：显示主窗口 / 启动 Agent / 设置 / 退出
+  - 窗口关闭行为：隐藏而非退出 (WindowEvent::CloseRequested → hide())
+  - 设置面板 (SettingsView.tsx)：Agent 路径配置、外观主题
+
+  交付物：完整的桌面集成体验 (托盘 + 窗口管理 + 设置)。
+
+  ---
+  Phase 7 — 多 Agent 并行与美化 (预计 2-3 日，可选)
+
+  目标：支持同时运行多个 Agent、动画细节打磨。
+
+  增强项：
+  - 多 Session 并行：每个 Agent 一个独立的 SessionSnapshot
+  - 窗口缩放和透明度调节
+  - 更多人物 GIF 变体 (季节主题、节日主题)
+  - 通知提醒 (Agent 任务完成后的系统通知)
+  - 错误恢复与重试机制
+
+  ---
+  五、项目目录结构总览 (Phase 1 完成后)
+
+  Galcode_island/
+  ├── src/                              # 前端源码
+  │   ├── main.tsx                      # React 入口
+  │   ├── App.tsx                       # 根组件 (label 路由)
+  │   ├── index.css                     # Tailwind 入口 + 全局样式
+  │   ├── components/
+  │   │   ├── welcome/
+  │   │   │   ├── WelcomeView.tsx       # 欢迎界面
+  │   │   │   ├── LogoAnimation.tsx     # Logo 动画
+  │   │   │   └── QuickStartGuide.tsx   # 快速引导
+  │   │   ├── control-bar/
+  │   │   │   ├── ControlBar.tsx        # 操作栏容器
+  │   │   │   ├── FolderPicker.tsx      # 文件夹选择按钮
+  │   │   │   ├── AgentSelector.tsx     # Agent 下拉菜单
+  │   │   │   └── LaunchButton.tsx      # 启动按钮
+  │   │   ├── status-monitor/
+  │   │   │   ├── StatusMonitor.tsx     # 监控区容器
+  │   │   │   ├── AgentStatusBadge.tsx  # 状态徽章
+  │   │   │   ├── TodoProgress.tsx      # 任务进度
+  │   │   │   ├── TodoItem.tsx          # 单条任务
+  │   │   │   └── LogStream.tsx         # 日志流
+  │   │   ├── pet-character/
+  │   │   │   ├── PetCharacter.tsx      # 人物容器
+  │   │   │   ├── CharacterGif.tsx      # GIF 渲染
+  │   │   │   └── AnimationController.tsx # 状态机
+  │   │   ├── chat-bubble/
+  │   │   │   ├── ChatBubble.tsx        # 气泡外层
+  │   │   │   ├── BubbleContainer.tsx   # 容器定位
+  │   │   │   ├── BubbleContent.tsx     # 内容渲染
+  │   │   │   └── EmotionFeedback.tsx   # 情绪文字
+  │   │   └── settings/
+  │   │       └── SettingsView.tsx      # 设置面板
+  │   ├── stores/
+  │   │   └── useAppStore.ts            # Zustand 全局状态
+  │   ├── hooks/
+  │   │   ├── useAgentIPC.ts            # Agent IPC 事件监听
+  │   │   └── useAnimationState.ts      # 动画状态机 hook
+  │   ├── types/
+  │   │   ├── agent.ts                  # Agent 相关类型
+  │   │   └── ipc.ts                    # IPC 相关类型
+  │   └── assets/
+  │       └── pet/                      # GIF 动图资源
+  ├── src-tauri/                        # Rust 后端
+  │   ├── src/
+  │   │   ├── main.rs                   # 入口
+  │   │   ├── lib.rs                    # 命令注册
+  │   │   ├── agent_manager.rs          # Agent 进程管理
+  │   │   ├── hook_parser.rs            # Agent 输出解析
+  │   │   └── window_utils.rs           # 窗口工具 (点击穿透等)
+  │   └── tauri.conf.json               # Tauri 配置
+  ├── public/
+  │   └── pet/                          # 静态 GIF 资源
+  ├── package.json
+  ├── vite.config.ts
+  ├── tailwind.config.ts
+  └── tsconfig.json
+
+  ---
+  六、开发顺序建议
+
+  Phase 1 (骨架+透明窗口)  →  Phase 2 (操作控制台+IPC)
+                                      ↓
+                                 Phase 3 (状态监控)  ← 核心难点：Agent 输出解析
+                                      ↓
+                Phase 4 (人物视觉层)  +  Phase 5 (对话气泡层)  可并行
+                                      ↓
+                                 Phase 6 (托盘+设置)
+                                      ↓
+                                 Phase 7 (美化增强, 可选)
+
+  每个 Phase 的验证标准：
+  - Phase 1: npm run tauri dev 看到一个透明无边框窗口
+  - Phase 2: 点击"打开文件夹"能弹出系统对话框，点击"启动"能在终端看到 Rust 打印的进程信息
+  - Phase 3: 启动 Agent 后，界面上实时显示状态徽章变化和日志
+  - Phase 4: GIF 动图能随状态自动切换
+  - Phase 5: 任务完成后气泡弹出，3 秒后自动消失
+  - Phase 6: 关闭窗口→隐藏到托盘，右键托盘→菜单
+
+  ---
+  以上即为完整的架构蓝图。每个 Phase 的具体组件代码编写由 Cursor 负责，你可以在每个 Phase 开始前将对应的组件清单和类型定义交给 Cursor。如果需要我对某个 Phase
+  做更细化的接口定义或 Rust 侧的架构补充，请告诉我。

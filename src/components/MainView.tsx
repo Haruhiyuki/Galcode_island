@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../stores/useAppStore";
 import type { AgentType } from "../types/agent";
+import { InputBubble } from "./chat-bubble/InputBubble";
 
 type PetVisualState = "thinking" | "completed" | "error" | "waiting";
 
@@ -255,46 +256,16 @@ export function MainView(): JSX.Element {
         <StatusLight />
       </div>
 
-      {/* Task input */}
-      <textarea
-        className="task-input"
-        value={task}
-        onChange={(e) => setTask(e.target.value)}
-        placeholder="用中文描述你想让 Agent 做的事…"
-      />
-
-      {/* Launch / Stop buttons */}
-      <div className="flex gap-2">
-        <motion.button
-          whileHover={{ y: -2, scale: 1.01 }}
-          whileTap={{ scale: 0.985 }}
-          type="button"
-          onClick={launch}
-          disabled={uiState === "running"}
-          className="rounded-xl border border-emerald-500/55 bg-emerald-500/28 px-4 py-2 text-xs font-medium text-zinc-900 backdrop-blur-md transition-all duration-300 hover:-translate-y-0.5 hover:bg-emerald-500/35 hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-45 dark:border-emerald-300/50 dark:bg-emerald-500/35 dark:text-zinc-100"
-        >
-          {uiState === "running" ? "运行中…" : "启动 Agent"}
-        </motion.button>
-        {uiState === "running" ? (
-          <motion.button
-            whileHover={{ y: -2, scale: 1.01 }}
-            whileTap={{ scale: 0.985 }}
-            type="button"
-            onClick={stop}
-            className="rounded-xl border border-rose-500/55 bg-rose-500/20 px-4 py-2 text-xs font-medium text-rose-600 backdrop-blur-md transition-all duration-300 hover:-translate-y-0.5 hover:bg-rose-500/35 dark:text-rose-100"
-          >
-            停止 Agent
-          </motion.button>
-        ) : null}
-      </div>
-
       {/* Progress + status + logs */}
       {hasActiveTask || uiState !== "idle" ? <TaskProgressSection /> : null}
 
-      {/* Pet GIF */}
-      <div className="relative min-h-[180px] flex-1">
-        <div className="absolute left-0 bottom-0">
+      {/* Pet GIF and Agent Input Bubble */}
+      <div className="relative min-h-[180px] flex-1 flex items-end">
+        <div className="flex w-full items-end gap-5 relative">
           <PetPreviewPanel />
+          <div className="mb-4 w-full max-w-lg">
+            <InputBubble />
+          </div>
         </div>
       </div>
     </motion.section>

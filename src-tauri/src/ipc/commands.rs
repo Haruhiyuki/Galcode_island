@@ -99,6 +99,12 @@ pub fn translate_only(text_zh: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+pub fn update_llm_settings(base_url: String, api_key: String, nickname: String, system_prompt: String) -> Result<(), String> {
+    crate::llm::client::update_global_settings(base_url, api_key, nickname, system_prompt);
+    Ok(())
+}
+
+#[tauri::command]
 pub fn set_click_through(app: AppHandle, enabled: bool) -> Result<(), String> {
     let w = app
         .get_webview_window("main")

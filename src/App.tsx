@@ -1,17 +1,31 @@
-import { useMemo } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useMemo } from "react";
 import { GlobalTopBar } from "./components/GlobalTopBar";
 import { MainView } from "./components/MainView";
 import { WelcomeView } from "./components/welcome/WelcomeView";
+import { SettingsModal } from "./components/settings/SettingsModal";
 import { useAgentIPC } from "./hooks/useAgentIPC";
 import { useThemeHotkey } from "./hooks/useThemeHotkey";
 import { useAppStore } from "./stores/useAppStore";
+import { useSettingsStore } from "./stores/useSettingsStore";
 
 function App(): JSX.Element {
   const isStarted = useAppStore((state) => state.isStarted);
 
   useThemeHotkey();
   useAgentIPC();
+
+  useEffect(() => {
+    // Sync persisted settings to Rust on mount
+    const state = useSettingsStore.getState();
+    invoke("update_llm_settings", {
+      baseUrl: state.apiBaseUrl,
+      apiKey: state.apiKey,
+      nickname: state.nickname,
+      systemPrompt: state.systemPrompt,
+    }).catch(console.error);
+  }, []);
 
   const currentScreen = useMemo(() => {
     return isStarted ? <MainView /> : <WelcomeView />;
@@ -34,6 +48,7 @@ function App(): JSX.Element {
             {currentScreen}
           </motion.div>
         </AnimatePresence>
+        <SettingsModal />
       </div>
     </main>
   );

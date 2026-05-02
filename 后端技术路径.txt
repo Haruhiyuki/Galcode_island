@@ -1,0 +1,612 @@
+Galcode_island 后端技术架构蓝图（Rust / Tauri v2）
+
+  ▎ 与前端文档联动阅读。本文档定义 Rust 后端的模块拆解、状态机设计、IPC 接口契约和分阶段开发步骤。
+
+  ---
+  一、后端技术栈
+
+  ┌─────────────┬────────────────────────────────────────┬─────────────────────────────────────────────────────┐
+  │    层面     │                  选型                  │                        理由                         │
+  ├─────────────┼────────────────────────────────────────┼─────────────────────────────────────────────────────┤
+  │ 桌面框架    │ Tauri v2 (已就位)                      │ 体积小，Rust 原生性能，跨平台                       │
+  ├─────────────┼────────────────────────────────────────┼─────────────────────────────────────────────────────┤
+  │ 进程管理    │ std::process::Command + tokio::process │ 异步管理 Agent 子进程的 stdin/stdout/stderr         │
+  ├─────────────┼────────────────────────────────────────┼─────────────────────────────────────────────────────┤
+  │ 异步运行时  │ tokio (Tauri 内置)                     │ Tauri v2 已内置 tokio，异步 TCP/文件/进程操作       │
+  ├─────────────┼────────────────────────────────────────┼─────────────────────────────────────────────────────┤
+  │ 序列化      │ serde + serde_json (已就位)            │ IPC 通信与 Hook 事件解析                            │
+  ├─────────────┼────────────────────────────────────────┼─────────────────────────────────────────────────────┤
+  │ HTTP 客户端 │ reqwest (参考 xsun)                    │ Phase 5 调用 LLM API 生成总结                       │
+  ├─────────────┼────────────────────────────────────────┼─────────────────────────────────────────────────────┤
+  │ 文件监控    │ notify crate                           │ 监控 Agent 输出日志文件的变化 (实时追踪)            │
+  ├─────────────┼────────────────────────────────────────┼─────────────────────────────────────────────────────┤
+  │ 跨平台窗口  │ Tauri window API + win32 API           │ 点击穿透、窗口置顶 (参考 xsun 的 window_utils.rs)   │
+  ├─────────────┼────────────────────────────────────────┼─────────────────────────────────────────────────────┤
+  │ 系统托盘    │ Tauri tray API                         │ 托盘菜单 (参考 BongoCat 的 useTray.ts 后端对应部分) │
+  └─────────────┴────────────────────────────────────────┴─────────────────────────────────────────────────────┘
+
+  Cargo.toml 推荐新增依赖
+
+  [dependencies]
+  tauri = { version = "2", features = ["tray-icon"] }  # 启用托盘功能
+  serde = { version = "1", features = ["derive"] }
+  serde_json = "1"
+  tokio = { version = "1", features = ["full"] }
+  notify = "6"                  # 文件系统监控
+  reqwest = { version = "0.12", features = ["json"] }  # LLM API 调用
+  uuid = { version = "1", features = ["v4"] }           # 生成唯一 Session ID
+  chrono = "0.4"                # 时间戳处理
+  log = "0.4"                   # 日志
+  env_logger = "0.11"           # 日志输出
+  thiserror = "2"               # 错误类型定义
+
+  [target.'cfg(target_os = "windows")'.dependencies]
+  windows = { version = "0.58", features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Foundation",
+  ]}  # Windows 点击穿透 (参考 xsun)
+
+  ---
+  二、后端模块架构
+
+  src-tauri/src/
+  ├── main.rs                      # 二进制入口 (已存在, 无需修改)
+  ├── lib.rs                       # Tauri Builder 装配 + 命令注册 (需重写)
+  │
+  ├── agent/                       # Agent 进程管理层
+  │   ├── mod.rs                   #   模块入口
+  │   ├── manager.rs               #   AgentManager: 子进程生命周期管理
+  │   ├── launcher.rs              #   启动逻辑: 构建 Command, 设置环境变量
+  │   └── config.rs                #   Agent 配置: 各 agent 的可执行路径/参数模板
+  │
+  ├── hook/                        # Hook 事件解析层
+  │   ├── mod.rs                   #   模块入口
+  │   ├── parser.rs                #   HookParser: stdout/文件 → HookEvent 结构化解析
+  │   ├── event.rs                 #   HookEvent 数据结构定义
+  │   ├── normalizer.rs            #   EventNormalizer: 跨 Agent 事件名标准化
+  │   └── watcher.rs               #   FileWatcher: 监控 Agent 输出的 hook 文件
+  │
+  ├── session/                     # 会话状态管理层
+  │   ├── mod.rs                   #   模块入口
+  │   ├── state.rs                 #   SessionState: 单会话状态机 (纯 reducer)
+  │   ├── snapshot.rs             #   SessionSnapshot: 会话快照数据结构
+  │   └── cleanup.rs              #   空闲会话清理 + 超时管理
+  │
+  ├── ipc/                         # IPC 接口层 (Tauri 命令 + 事件)
+  │   ├── mod.rs                   #   模块入口
+  │   ├── commands.rs              #   Tauri #[tauri::command] 函数集合
+  │   └── events.rs               #   Tauri Event 定义与发射
+  │
+  ├── llm/                         # LLM 集成层 (Phase 5)
+  │   ├── mod.rs                   #   模块入口
+  │   ├── client.rs                #   HTTP 客户端: 调用 DeepSeek/OpenAI API
+  │   └── prompt.rs               #   Prompt 模板: 总结生成 / 情绪反馈
+  │
+  └── window_utils.rs              # 窗口工具: 点击穿透 (参考 xsun)
+
+  模块职责速查
+
+  ┌──────────────────┬────────────────────────────────────────────────────────────────────────────┬────────────────────────────────────┐
+  │       模块       │                                  核心职责                                  │              关键输出              │
+  ├──────────────────┼────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────┤
+  │ agent::manager   │ 维护 HashMap<SessionId, Child> 进程池，启动/停止/监控 Agent 子进程         │ 进程句柄、PID                      │
+  ├──────────────────┼────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────┤
+  │ agent::launcher  │ 根据 Agent 类型构建 std::process::Command，配置 hook 环境变量              │ Command 实例                       │
+  ├──────────────────┼────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────┤
+  │ hook::parser     │ 解析 Agent 输出的 JSON 行，构造 HookEvent                                  │ Result<HookEvent>                  │
+  ├──────────────────┼────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────┤
+  │ hook::normalizer │ 跨 Agent 事件名标准化 (如 Claude 的 pre_tool_use → PreToolUse)             │ 标准化事件名                       │
+  ├──────────────────┼────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────┤
+  │ hook::watcher    │ (备选方案) 用 notify crate 监控 Agent 的 hook 输出文件                     │ 文件变更事件                       │
+  ├──────────────────┼────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────┤
+  │ session::state   │ 纯函数 reduce_event(): 根据 HookEvent 更新 SessionSnapshot，返回副作用列表 │ (SessionSnapshot, Vec<SideEffect>) │
+  ├──────────────────┼────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────┤
+  │ session::cleanup │ 定时器驱动的空闲会话回收 (参考 CodeIsland 的 cleanupIdleSessions)          │ 清理动作                           │
+  ├──────────────────┼────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────┤
+  │ ipc::commands    │ launch_agent、stop_agent、select_project_folder 等前端调用入口             │ Tauri 命令返回值                   │
+  ├──────────────────┼────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────┤
+  │ ipc::events      │ 将 SideEffect 转化为 app_handle.emit(...) 推送到前端                       │ Tauri 事件                         │
+  └──────────────────┴────────────────────────────────────────────────────────────────────────────┴────────────────────────────────────┘
+
+  ---
+  三、核心数据模型
+
+  3.1 Agent 状态机
+
+  /// Agent 状态枚举 (与前端 types/agent.ts 一一对应)
+  #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+  pub enum AgentStatus {
+      Idle,              // 空闲
+      Starting,          // 正在启动 Agent 进程
+      Running,           // Agent 进程已启动，等待首条 hook
+      Thinking,          // LLM 推理中
+      Processing,        // 正在执行工具
+      WaitingApproval,   // 等待用户审批
+      Completed,         // 当前任务完成
+      Error,             // 发生错误
+  }
+
+  3.2 Hook 事件结构 (参考 CodeIsland 的 HookEvent)
+
+  /// 从 Agent 输出解析得到的标准化事件
+  #[derive(Debug, Clone, Serialize, Deserialize)]
+  pub struct HookEvent {
+      pub event_name: String,          // 标准化后的事件名: "PreToolUse", "Stop" 等
+      pub session_id: Option<String>,  // 会话 ID
+      pub tool_name: Option<String>,   // 工具名: Bash, Read, Edit, Write...
+      pub tool_use_id: Option<String>, // 工具调用唯一 ID
+      pub tool_input: Option<serde_json::Value>,  // 工具输入参数
+      pub cwd: Option<String>,         // 当前工作目录
+      pub model: Option<String>,       // LLM 模型名
+      pub agent_id: Option<String>,    // 子 Agent ID
+      pub raw_json: serde_json::Value, // 原始 JSON (保留完整信息)
+  }
+
+  3.3 Session 快照 (参考 CodeIsland 的 SessionSnapshot)
+
+  /// 单个 Agent 会话的完整状态快照
+  #[derive(Debug, Clone, Serialize, Deserialize)]
+  pub struct SessionSnapshot {
+      pub session_id: String,
+      pub agent_type: String,          // "claude-code", "opencode", "codex"...
+      pub status: AgentStatus,
+      pub cwd: Option<String>,         // 项目路径
+      pub model: Option<String>,       // 使用的模型
+      pub current_tool: Option<String>,      // 当前工具
+      pub tool_description: Option<String>,  // 工具描述
+      pub tool_history: Vec<ToolHistoryEntry>, // 最近工具历史
+      pub last_user_prompt: Option<String>,
+      pub last_assistant_message: Option<String>,
+      pub start_time: chrono::DateTime<chrono::Utc>,
+      pub last_activity: chrono::DateTime<chrono::Utc>,
+      pub pid: Option<u32>,            // 子进程 PID
+      pub interrupted: bool,           // 是否被用户中断
+  }
+
+  /// 工具历史条目
+  #[derive(Debug, Clone, Serialize, Deserialize)]
+  pub struct ToolHistoryEntry {
+      pub tool: String,
+      pub description: Option<String>,
+      pub timestamp: chrono::DateTime<chrono::Utc>,
+      pub success: bool,
+  }
+
+  3.4 副作用模型 (纯 reducer 的输出)
+
+  /// reduce_event() 返回的副作用，由调用方执行
+  #[derive(Debug, Clone)]
+  pub enum SideEffect {
+      /// 启动进程监控
+      MonitorProcess { session_id: String, pid: u32 },
+      /// 停止进程监控
+      StopMonitor { session_id: String },
+      /// 移除会话
+      RemoveSession { session_id: String },
+      /// 入队完成通知 (任务结束后触发气泡)
+      EnqueueCompletion { session_id: String },
+      /// 推送前端事件: 状态变化
+      EmitStatusChanged { session_id: String, status: AgentStatus },
+      /// 推送前端事件: 工具执行
+      EmitToolUpdate { session_id: String, tool: String, description: Option<String> },
+      /// 推送前端事件: 任务列表更新
+      EmitTodoUpdate { session_id: String, todos: Vec<TodoItem> },
+      /// 推送前端事件: 日志
+      EmitLog { session_id: String, level: String, message: String },
+      /// 推送前端事件: 任务完成
+      EmitSessionComplete { session_id: String, summary: Option<String>, emotion: Option<String> },
+  }
+
+  ---
+  四、IPC 接口契约 (前后端联动)
+
+  4.1 前端 → Rust (Tauri Commands)
+
+  // ===== ipc/commands.rs =====
+
+  /// 打开系统文件夹选择对话框，返回用户选择的路径
+  #[tauri::command]
+  async fn select_project_folder() -> Result<String, String>;
+  // 前端调用: invoke('select_project_folder')
+  // 返回: "/path/to/project"
+
+  /// 启动指定 Agent
+  #[tauri::command]
+  async fn launch_agent(
+      agent: String,          // "claude-code" | "opencode" | "codex" | "gemini" | "cursor"
+      cwd: String,            // 项目路径
+      state: State<AppState>,
+  ) -> Result<LaunchResult, String>;
+  // 前端调用: invoke('launch_agent', { agent, cwd })
+  // 返回: { session_id: "uuid-xxxx", status: "Starting" }
+
+  /// 停止指定 Agent
+  #[tauri::command]
+  async fn stop_agent(
+      session_id: String,
+      state: State<AppState>,
+  ) -> Result<(), String>;
+  // 前端调用: invoke('stop_agent', { sessionId })
+
+  /// 回复权限请求 (allow / deny)
+  #[tauri::command]
+  async fn respond_permission(
+      session_id: String,
+      tool_use_id: String,
+      decision: String,  // "allow" | "deny"
+      state: State<AppState>,
+  ) -> Result<(), String>;
+  // 前端调用: invoke('respond_permission', { sessionId, toolUseId, decision })
+
+  /// 获取会话的最近日志
+  #[tauri::command]
+  async fn get_session_logs(
+      session_id: String,
+      state: State<AppState>,
+  ) -> Result<Vec<String>, String>;
+
+  4.2 Rust → 前端 (Tauri Events)
+
+  // ===== ipc/events.rs =====
+  // 所有事件通过 app_handle.emit(...) 推送
+
+  // 状态变化 (最频繁)
+  app_handle.emit("agent://status-changed", StatusChangedPayload {
+      session_id: "...",
+      status: "Thinking",       // ← AgentStatus 的字符串形态
+      tool_name: Some("Bash"),  // 可选, processing 状态时携带
+      tool_description: Some("npm run build"),
+  })?;
+
+  // 工具开始执行
+  app_handle.emit("agent://tool-update", ToolUpdatePayload {
+      session_id: "...",
+      tool: "Bash",
+      description: "npm run build",
+      tool_use_id: "toolu_xxx",
+  })?;
+
+  // 工具执行结果
+  app_handle.emit("agent://tool-result", ToolResultPayload {
+      session_id: "...",
+      tool: "Bash",
+      success: true,
+      output: Some("Build completed successfully"),
+  })?;
+
+  // 权限审批请求
+  app_handle.emit("agent://permission-request", PermissionRequestPayload {
+      session_id: "...",
+      tool_name: "Bash",
+      tool_description: "rm -rf /path",
+      tool_use_id: "toolu_xxx",
+      raw_input: json!({"command": "rm -rf /path"}),
+  })?;
+
+  // 任务完成 (含 LLM 总结和情绪反馈)
+  app_handle.emit("agent://session-complete", SessionCompletePayload {
+      session_id: "...",
+      summary: Some("修改了 3 个文件...".to_string()),
+      emotion: Some("太棒了，任务全部完成！🎉".to_string()),
+  })?;
+
+  // 单条日志
+  app_handle.emit("agent://log", LogPayload {
+      session_id: "...",
+      level: "info",
+      message: "PreToolUse: Bash - npm install",
+      timestamp: "2026-05-02T12:00:00Z",
+  })?;
+
+  // 错误
+  app_handle.emit("agent://error", ErrorPayload {
+      session_id: "...",
+      message: "Agent process exited unexpectedly",
+      code: "PROCESS_EXITED",
+  })?;
+
+  4.3 数据流全景图
+
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │                         React 前端                                   │
+  │  ┌─────────┐  ┌──────────────┐  ┌────────────┐  ┌──────────────┐  │
+  │  │ControlBar│  │StatusMonitor │  │PetCharacter│  │  ChatBubble  │  │
+  │  └────┬─────┘  └──────▲───────┘  └─────▲──────┘  └──────▲───────┘  │
+  │       │ invoke         │ listen         │ listen         │ listen   │
+  └───────┼────────────────┼────────────────┼────────────────┼──────────┘
+          │                │                │                │
+     ┌────▼────┐    ┌──────┴──────┐  ┌──────┴──────┐  ┌──────┴──────┐
+     │ Commands│    │ agent://    │  │ agent://    │  │ agent://    │
+     │  (IPC)  │    │status-     │  │status-     │  │session-    │
+     │         │    │changed     │  │changed     │  │complete    │
+     └────┬────┘    └──────▲──────┘  └──────▲──────┘  └──────▲──────┘
+          │                │                │                │
+  ┌───────┴────────────────┴────────────────┴────────────────┴──────────┐
+  │                         Rust 后端 (Tauri)                            │
+  │                                                                      │
+  │  ┌──────────┐   ┌──────────────┐   ┌──────────────┐                 │
+  │  │  ipc/    │   │   ipc/       │   │   session/   │                 │
+  │  │commands.rs│──▶│  events.rs   │◀──│   state.rs   │                 │
+  │  └────┬─────┘   └──────────────┘   └──────▲───────┘                 │
+  │       │ invoke                             │ SideEffects             │
+  │       ▼                                    │                         │
+  │  ┌──────────────┐                  ┌───────┴───────┐                │
+  │  │ agent/       │   stdout JSON    │  hook/        │                │
+  │  │ manager.rs   │─────────────────▶│  parser.rs    │                │
+  │  │              │                  │               │                │
+  │  │ spawn/kill   │                  │ parse →       │                │
+  │  │ Agent CLI    │                  │ HookEvent     │                │
+  │  └──────────────┘                  └───────┬───────┘                │
+  │                                            │                         │
+  │                                     hook/event.rs                    │
+  │                                     hook/normalizer.rs               │
+  └──────────────────────────────────────────────────────────────────────┘
+
+  ---
+  五、核心设计：Hook 事件解析策略
+
+  5.1 方案选型
+
+  针对不同 Agent 的 hook 输出方式，采用分层兼容策略：
+
+  ┌────────┬─────────────────────┬───────────────────────────┬──────────────────────────────────────────┐
+  │ 优先级 │        方案         │        适用 Agent         │                 实现方式                 │
+  ├────────┼─────────────────────┼───────────────────────────┼──────────────────────────────────────────┤
+  │ 首选   │ stdout JSON 行解析  │ Claude Code (已配置 hook) │ 子进程 stdout 逐行读取，反序列化 JSON    │
+  ├────────┼─────────────────────┼───────────────────────────┼──────────────────────────────────────────┤
+  │ 备选   │ 文件监控            │ 所有 Agent                │ notify crate 监控 Agent 的 hook 输出文件 │
+  ├────────┼─────────────────────┼───────────────────────────┼──────────────────────────────────────────┤
+  │ 兜底   │ stdout 文本正则匹配 │ 未配置 hook 的 Agent      │ 正则匹配工具调用模式                     │
+  └────────┴─────────────────────┴───────────────────────────┴──────────────────────────────────────────┘
+
+  5.2 Claude Code Hook 配置 (自动注入)
+
+  在启动 Claude Code 时，通过环境变量或 CLI 参数自动注入 hook 配置：
+
+  // ~/.claude/settings.json (由 Rust 自动写入)
+  {
+    "hooks": {
+      "PreToolUse": [
+        {
+          "matcher": "*",
+          "hooks": [{
+            "type": "command",
+            "command": "echo '{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"$CLAUDE_TOOL_NAME\",\"tool_input\":$CLAUDE_TOOL_INPUT}' >>
+  /tmp/galcode_hooks.jsonl"
+          }]
+        }
+      ]
+    }
+  }
+
+  更优方案：stdout 内联输出。启动 Claude Code 时加 --print 参数（如果支持），或者通过 --append-system-prompt 注入指令让 Agent 在每次工具调用前后输出特定 JSON
+  行到 stdout。Rust 侧通过 child.stdout.take() 获取异步流，逐行解析。
+
+  5.3 事件标准化 (参考 CodeIsland 的 EventNormalizer)
+
+  /// 事件名标准化：将不同 Agent 的异构事件名映射为统一名称
+  pub fn normalize_event_name(raw: &str) -> &str {
+      match raw.to_lowercase().as_str() {
+          // Claude Code
+          "pre_tool_use" | "pretooluse"      => "PreToolUse",
+          "post_tool_use" | "posttooluse"    => "PostToolUse",
+          "post_tool_use_failure"             => "PostToolUseFailure",
+          "user_prompt_submit"                => "UserPromptSubmit",
+          "stop" | "session_end"             => "Stop",
+          "session_start"                     => "SessionStart",
+          "subagent_start"                    => "SubagentStart",
+          "subagent_stop"                     => "SubagentStop",
+          "permission_request"                => "PermissionRequest",
+          "notification"                      => "Notification",
+          // OpenCode / Codex / Gemini ... (后续扩展)
+          _ => raw,
+      }
+  }
+
+  ---
+  六、分阶段开发步骤 (与前端 Phase 对齐)
+
+  Backend Phase 1 — 基础 IPC + 窗口配置 (对应前端 P1)
+
+  目标：搭建 Rust 模块骨架，透明窗口配置，验证 IPC 通路。
+
+  具体工作：
+  1. 修改 tauri.conf.json：transparent: true, decorations: false, alwaysOnTop: true, skipTaskbar: true
+  2. 创建模块目录结构和 mod.rs 文件
+  3. 实现 window_utils.rs：Windows 点击穿透 (移植自 xsun)
+  4. 编写 ipc/commands.rs 的第一个命令：select_project_folder (调用 tauri-plugin-dialog)
+  5. 在 lib.rs 注册所有命令和事件
+  6. 更新 capabilities/default.json，增加必要的权限
+
+  验证：npm run tauri dev → 透明窗口 + 前端可 invoke select_project_folder 获取路径。
+
+  ---
+  Backend Phase 2 — Agent 进程管理 (对应前端 P2)
+
+  目标：能够从 Rust 启动和停止 Agent CLI 子进程。
+
+  具体工作：
+  1. agent/config.rs：定义各 Agent 的可执行路径和默认参数
+  pub struct AgentConfig {
+      pub name: String,
+      pub executable: String,      // "claude" / "opencode" / "codex"
+      pub args: Vec<String>,       // 默认参数
+      pub env_vars: HashMap<String, String>,  // hook 配置环境变量
+  }
+  2. agent/launcher.rs：fn launch(config: &AgentConfig, cwd: &Path) -> Result<Child>
+  3. agent/manager.rs：AgentManager 结构体
+    - sessions: HashMap<String, AgentSession> (session_id → 进程句柄 + 元数据)
+    - fn spawn(&mut self, config, cwd) -> String (返回 session_id)
+    - fn kill(&mut self, session_id) -> Result<()>
+  4. ipc/commands.rs：注册 launch_agent、stop_agent 命令
+  5. 启动成功/失败后 emit 相应事件到前端
+
+  关键数据结构：
+  struct AgentSession {
+      session_id: String,
+      agent_type: String,
+      child: tokio::process::Child,
+      pid: u32,
+      start_time: Instant,
+      cwd: PathBuf,
+  }
+
+  验证：前端点启动 → Rust spawn 子进程 → 前端收到 agent://status-changed { status: "Starting" }。
+
+  ---
+  Backend Phase 3 — Hook 事件解析 + Session 状态机 (对应前端 P3)
+
+  目标：这是最核心的阶段。解析 Agent 输出，驱动状态机，推送事件到前端。
+
+  具体工作：
+  1. hook/event.rs：定义 HookEvent 结构体 + fn from_json_line(line: &str) -> Result<HookEvent>
+  2. hook/normalizer.rs：实现 normalize_event_name() + 事件名别名映射表
+  3. hook/parser.rs：HookParser — 逐行读取 stdout，解析 JSON，推送事件
+  impl HookParser {
+      async fn read_loop(
+          stdout: ChildStdout,
+          tx: mpsc::Sender<HookEvent>,
+      ) -> Result<()> {
+          let reader = BufReader::new(stdout);
+          let mut lines = reader.lines();
+          while let Some(line) = lines.next_line().await? {
+              if let Ok(event) = HookEvent::from_json_line(&line) {
+                  tx.send(event).await.ok();
+              }
+          }
+          Ok(())
+      }
+  }
+  4. session/snapshot.rs：定义 SessionSnapshot 结构体
+  5. session/state.rs：实现纯 reducer (参考 CodeIsland 的 reduceEvent)
+  /// 纯函数: 给定当前会话状态和事件, 返回新状态 + 副作用列表
+  pub fn reduce_event(
+      snapshot: &mut SessionSnapshot,
+      event: &HookEvent,
+  ) -> Vec<SideEffect>;
+  5. 状态转换规则：
+  Idle + SessionStart   → Starting    + MonitorProcess
+  Idle + UserPromptSubmit → Processing
+  Processing + PreToolUse → Running   + EmitToolUpdate
+  Running + PostToolUse  → Processing + EmitToolResult
+  * + Stop               → Idle       + EnqueueCompletion
+  * + Error              → Error      + EmitError
+  6. session/cleanup.rs：tokio 定时任务，清理超时的 idle 会话 (参考 CodeIsland 的 cleanupIdleSessions)
+  7. ipc/events.rs：将 SideEffect::EmitXxx 转化为 app_handle.emit(...)
+  8. 将全部模块串联到 lib.rs 的 setup() 中
+
+  验证：启动 Claude Code → 前端实时看到 status 从 Starting → Running → Processing → Idle 的变化 + 工具调用日志。
+
+  ---
+  Backend Phase 4 — 权限审批 + 任务完成 (对应前端 P4/P5)
+
+  目标：处理需要用户确认的工具调用，任务完成后生成总结。
+
+  具体工作：
+  1. 权限审批流：
+    - Rust 收到 PermissionRequest 事件 → 暂停 Agent stdin (等待用户决策)
+    - emit agent://permission-request 到前端
+    - 前端调用 respond_permission → Rust 向 Agent stdin 写入 allow/deny
+  2. 任务完成处理：
+    - Stop 事件 → SideEffect::EnqueueCompletion
+    - 收集 session 的工具历史 → 构建总结文本
+    - emit agent://session-complete (含 summary + emotion)
+
+  验证：Agent 执行危险操作时前端弹出确认，任务完成后气泡展示总结。
+
+  ---
+  Backend Phase 5 — LLM 总结生成 (对应前端 P5 增强)
+
+  目标：调用 LLM API 生成人性化的任务总结和情绪反馈。
+
+  具体工作：
+  1. llm/client.rs：
+  pub async fn generate_summary(
+      tool_history: &[ToolHistoryEntry],
+      last_prompt: &str,
+      api_config: &LlmConfig,
+  ) -> Result<SummaryResult>;
+    - 构建 Prompt：将工具历史 + 用户原始 prompt 组合，请求 LLM 生成 2-3 句总结 + 1 句情绪反馈
+    - 调用 DeepSeek / OpenAI API
+    - 返回 { summary, emotion }
+  2. llm/prompt.rs：总结生成的 System Prompt 模板
+  3. 在 SideEffect::EnqueueCompletion 的处理中插入 LLM 调用
+
+  验证：任务完成后气泡展示 "修改了 3 个文件，新增了登录功能 → 你今天效率很高！继续保持~"
+
+  ---
+  Backend Phase 6 — 系统托盘 + 多窗口管理 (对应前端 P6)
+
+  目标：托盘菜单、窗口显示/隐藏、多 Agent 并行。
+
+  具体工作：
+  1. 实现托盘菜单 (参考 xsun 的 create_tray_menu)
+    - 菜单项：显示主窗口 / 启动 Agent / 设置 / 退出
+  2. 窗口关闭行为：WindowEvent::CloseRequested → hide() (参考 BongoCat)
+  3. 多 Agent 并行支持：AgentManager 的 sessions: HashMap<String, AgentSession> 已支持
+  4. capabilities/default.json 增加托盘相关权限
+
+  验证：关闭窗口→托盘，右击托盘→菜单，可同时运行多个 Agent。
+
+  ---
+  七、Rust 项目目录结构总览 (Phase 3 完成后)
+
+  src-tauri/
+  ├── Cargo.toml
+  ├── tauri.conf.json
+  ├── build.rs
+  ├── capabilities/
+  │   └── default.json
+  ├── icons/                          # 应用图标
+  └── src/
+      ├── main.rs                     # #[cfg_attr] + fn main → lib::run()
+      ├── lib.rs                      # Tauri Builder + setup + 命令注册
+      ├── agent/
+      │   ├── mod.rs
+      │   ├── manager.rs              # AgentManager: HashMap<SessionId, AgentSession>
+      │   ├── launcher.rs             # 构建 std::process::Command
+      │   └── config.rs               # Agent 配置表
+      ├── hook/
+      │   ├── mod.rs
+      │   ├── event.rs                # HookEvent 结构体 + JSON 反序列化
+      │   ├── parser.rs               # stdout 读取 + 逐行解析
+      │   ├── normalizer.rs           # 事件名标准化
+      │   └── watcher.rs              # (备选) 文件监控
+      ├── session/
+      │   ├── mod.rs
+      │   ├── state.rs                # reduce_event() 纯 reducer
+      │   ├── snapshot.rs             # SessionSnapshot 数据结构
+      │   └── cleanup.rs              # 定时清理空闲会话
+      ├── ipc/
+      │   ├── mod.rs
+      │   ├── commands.rs             # #[tauri::command] 所有命令
+      │   └── events.rs               # Event payload 定义 + emit 辅助函数
+      ├── llm/
+      │   ├── mod.rs
+      │   ├── client.rs              # reqwest → DeepSeek API
+      │   └── prompt.rs              # Summary prompt 模板
+      └── window_utils.rs             # Windows 点击穿透
+
+  ---
+  八、前后端阶段对照表
+
+  ┌──────┬─────────────────────┬──────────────────────────────────┬─────────────────────────────────┐
+  │ 阶段 │        前端         │               后端               │            联调目标             │
+  ├──────┼─────────────────────┼──────────────────────────────────┼─────────────────────────────────┤
+  │ P1   │ 透明窗口 + 欢迎界面 │ 窗口配置 + select_project_folder │ 透明窗口可见 + 能选文件夹       │
+  ├──────┼─────────────────────┼──────────────────────────────────┼─────────────────────────────────┤
+  │ P2   │ 操作控制台          │ Agent 进程启动/停止              │ 点启动 → Rust 拉起 Agent 子进程 │
+  ├──────┼─────────────────────┼──────────────────────────────────┼─────────────────────────────────┤
+  │ P3   │ 状态监控 UI         │ Hook 解析 + Session 状态机       │ Agent 操作实时反映到监控面板    │
+  ├──────┼─────────────────────┼──────────────────────────────────┼─────────────────────────────────┤
+  │ P4   │ 人物视觉层          │ 权限审批流                       │ 人物 GIF 随状态切换             │
+  ├──────┼─────────────────────┼──────────────────────────────────┼─────────────────────────────────┤
+  │ P5   │ 对话气泡层          │ LLM 总结生成                     │ 任务完成 → 气泡弹出总结         │
+  ├──────┼─────────────────────┼──────────────────────────────────┼─────────────────────────────────┤
+  │ P6   │ 托盘+设置           │ 托盘菜单+多 Agent                │ 完整的桌面集成体验              │
+  └──────┴─────────────────────┴──────────────────────────────────┴─────────────────────────────────┘
+
+  最关键的阶段是 P3，它决定了整个项目的核心价值——Agent 状态能否准确、实时地映射到前端 UI。建议在 P3 投入最多的时间和测试。
+
+  ---
+  以上即为后端架构蓝图。前后端两份文档合在一起，构成了 Galcode_island 从零到完整交付的完整技术路径。如需对某个模块写更细化的接口定义或伪代码，请告诉我。

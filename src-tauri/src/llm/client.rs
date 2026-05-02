@@ -2,6 +2,21 @@ use super::prompt;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use std::sync::{Mutex, OnceLock};
+
+#[derive(Debug, Clone, Default)]
+pub struct GlobalLlmSettings {
+    pub base_url: String,
+    pub api_key: String,
+    pub nickname: String,
+    pub system_prompt: String,
+}
+
+static GLOBAL_LLM_SETTINGS: OnceLock<Mutex<GlobalLlmSettings>> = OnceLock::new();
+
+fn get_global_settings() -> &'static Mutex<GlobalLlmSettings> {
+    GLOBAL_LLM_SETTINGS.get_or_init(|| Mutex::new(GlobalLlmSettings::default()))
+}
 
 #[derive(Debug, Clone)]
 pub struct LlmConfig {
@@ -10,15 +25,41 @@ pub struct LlmConfig {
     pub model: String,
 }
 
+pub fn update_global_settings(base_url: String, api_key: String, nickname: String, system_prompt: String) {
+    if let Ok(mut settings) = get_global_settings().lock() {
+        if !base_url.is_empty() {
+            settings.base_url = base_url;
+        }
+        if !api_key.is_empty() {
+            settings.api_key = api_key; // Update or keep old
+        }
+        settings.nickname = nickname;
+        settings.system_prompt = system_prompt;
+    }
+}
+
 pub fn load_llm_config() -> Option<LlmConfig> {
-    let api_key = std::env::var("LLM_API_KEY").ok()?.trim().to_string();
+    let mut api_key = String::new();
+    let mut base_url = String::new();
+    
+    if let Ok(settings) = get_global_settings().lock() {
+        api_key = settings.api_key.clone();
+        base_url = settings.base_url.clone();
+    }
+    
+    if api_key.is_empty() {
+        api_key = std::env::var("LLM_API_KEY").ok()?.trim().to_string();
+    }
     if api_key.is_empty() {
         return None;
     }
-    let base_url = std::env::var("LLM_BASE_URL")
-        .unwrap_or_else(|_| "https://api.openai.com/v1".to_string())
-        .trim_end_matches('/')
-        .to_string();
+    
+    if base_url.is_empty() {
+        base_url = std::env::var("LLM_BASE_URL")
+            .unwrap_or_else(|_| "https://api.openai.com/v1".to_string())
+            .trim_end_matches('/')
+            .to_string();
+    }
     let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
     Some(LlmConfig {
         base_url,
@@ -62,15 +103,28 @@ struct RespMessage {
     content: String,
 }
 
-fn chat_completion(cfg: &LlmConfig, system: &str, user: &str) -> Result<String, String> {
+fn chat_completion(cfg: &LlmConfig, base_system: &str, user: &str) -> Result<String, String> {
     let client = http_client()?;
     let url = format!("{}/chat/completions", cfg.base_url);
+    
+    // Combine custom system prompt and base system prompt
+    let mut custom_system = String::new();
+    if let Ok(settings) = get_global_settings().lock() {
+        let nickname = if settings.nickname.is_empty() { "部员" } else { &settings.nickname };
+        if !settings.system_prompt.is_empty() {
+            custom_system = format!("用户称呼：{}\n用户设定的悄悄话(系统提示词)：{}\n\n---\n", nickname, settings.system_prompt);
+        } else {
+            custom_system = format!("用户称呼：{}\n\n---\n", nickname);
+        }
+    }
+    let final_system = format!("{}{}", custom_system, base_system);
+
     let body = ChatRequest {
         model: &cfg.model,
         messages: vec![
             Message {
                 role: "system",
-                content: system,
+                content: &final_system,
             },
             Message {
                 role: "user",

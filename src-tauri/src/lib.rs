@@ -9,7 +9,7 @@ use tauri::Manager;
 
 use ipc::commands::{
     get_session_logs, launch_agent, respond_permission, select_project_folder, set_click_through,
-    start_agent, stop_agent, translate_only,
+    start_agent, stop_agent, translate_only, update_llm_settings,
 };
 use std::sync::Arc;
 
@@ -63,6 +63,7 @@ pub fn run() {
             get_session_logs,
             translate_only,
             set_click_through,
+            update_llm_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
