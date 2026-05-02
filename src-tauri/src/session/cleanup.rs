@@ -1,13 +1,11 @@
 use crate::AppState;
 use std::sync::Arc;
 use tauri::Emitter;
-use tokio::time::{interval, Duration};
 
 pub fn spawn_idle_cleanup_loop(app: tauri::AppHandle, state: Arc<AppState>) {
-    tokio::spawn(async move {
-        let mut tick = interval(Duration::from_secs(120));
+    std::thread::spawn(move || {
         loop {
-            tick.tick().await;
+            std::thread::sleep(std::time::Duration::from_secs(120));
             let removed = {
                 let mut mgr = match state.manager.lock() {
                     Ok(g) => g,

@@ -10,16 +10,24 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@tailwindcss/vite": "^4.2.4",
     "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2.7.0",
     "@tauri-apps/plugin-opener": "^2",
+    "framer-motion": "^12.38.0",
     "pixi-live2d-display": "^0.5.0-beta",
     "pixi.js": "^7.4.2",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "tailwindcss": "^4.2.4",
+    "zustand": "^5.0.12"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^4.6.0",
+    "typescript": "^6.0.3",
     "vite": "^7.0.4"
   }
 }
