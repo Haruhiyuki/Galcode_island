@@ -20,14 +20,18 @@ pub fn select_project_folder(app: AppHandle) -> Result<Option<String>, String> {
     }))
 }
 
-/// 黑客松计划兼容：中文任务 → 可选翻译 → 启动 Demo Agent（工作目录默认 `.`，可传 `cwd`）。
+/// 中文任务 → 可选翻译 → 启动所选 Agent（工作目录默认 `.`，可传 `cwd`）。未传 `agent` 时默认 OpenCode。
 #[tauri::command]
 pub fn start_agent(
     app: AppHandle,
     state: State<Arc<AppState>>,
     user_input_zh: String,
     cwd: Option<String>,
+<<<<<<< Updated upstream
     selected_agent: Option<String>,
+=======
+    agent: Option<String>,
+>>>>>>> Stashed changes
 ) -> Result<LaunchResult, String> {
     let cwd = cwd.unwrap_or_else(|| ".".to_string());
     let prev = {
@@ -37,6 +41,7 @@ pub fn start_agent(
     if let Some(sid) = prev {
         let _ = manager::stop_session(app.clone(), Arc::clone(state.inner()), sid);
     }
+<<<<<<< Updated upstream
 <<<<<<< Updated upstream
     manager::launch_demo_agent(app, Arc::clone(state.inner()), cwd, user_input_zh)
 =======
@@ -68,6 +73,14 @@ pub fn start_agent(
         )),
     }
 >>>>>>> Stashed changes
+=======
+    let agent_type = agent.unwrap_or_else(|| "opencode".to_string());
+    match agent_type.as_str() {
+        "opencode" => manager::launch_opencode_agent(app, Arc::clone(state.inner()), cwd, user_input_zh),
+        "demo" => manager::launch_demo_agent(app, Arc::clone(state.inner()), cwd, user_input_zh),
+        other => Err(format!("暂不支持的 Agent: {}", other)),
+    }
+>>>>>>> Stashed changes
 }
 
 #[tauri::command]
@@ -82,6 +95,10 @@ pub fn launch_agent(
         "demo" => {
             let task = task_zh.ok_or_else(|| "demo agent 需要参数 task_zh".to_string())?;
             manager::launch_demo_agent(app, Arc::clone(state.inner()), cwd, task)
+        }
+        "opencode" => {
+            let task = task_zh.ok_or_else(|| "opencode 需要参数 task_zh".to_string())?;
+            manager::launch_opencode_agent(app, Arc::clone(state.inner()), cwd, task)
         }
         _ => Err(format!("暂不支持的 agent 类型: {}", agent)),
     }

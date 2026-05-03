@@ -1,0 +1,493 @@
+一、前端接口检查结果
+
+  前端已定义的数据契约（你这边已经写好了）
+
+  前端 → 后端（invoke 调用）：
+
+  ┌───────────────────────┬─────────────────────────────────────────────┬──────────────────────┬────────────────────┐
+  │         命令          │                    参数                     │       触发时机       │        状态        │
+  ├───────────────────────┼─────────────────────────────────────────────┼──────────────────────┼────────────────────┤
+  │ start_agent           │ { userInputZh, cwd }                        │ InputBubble 点启动   │ ⚠️ 缺少 agent 类型 │
+  ├───────────────────────┼─────────────────────────────────────────────┼──────────────────────┼────────────────────┤
+  │ stop_agent            │ {}                                          │ GlobalTopBar 点停止  │ ✅                 │
+  ├───────────────────────┼─────────────────────────────────────────────┼──────────────────────┼────────────────────┤
+  │ update_llm_settings   │ { baseUrl, apiKey, nickname, systemPrompt } │ App 挂载 + 设置保存  │ ✅                 │
+  ├───────────────────────┼─────────────────────────────────────────────┼──────────────────────┼────────────────────┤
+  │ select_project_folder │ 无                                          │ WelcomeView 选择项目 │ ✅                 │
+  └───────────────────────┴─────────────────────────────────────────────┴──────────────────────┴────────────────────┘
+
+  后端 → 前端（事件，useAgentIPC 已监听）：
+
+  ┌──────────────────────────┬──────────────────────────────────────────────────────────────────────────────────────┬──────────────────────────┐
+  │           事件           │                                    前端期望的字段                                    │           用途           │
+  ├──────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────┼──────────────────────────┤
+  │ agent://status-changed   │ sessionId, status, percent, toolName, toolDescription                                │ 更新进度条、状态灯、气泡 │
+  ├──────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────┼──────────────────────────┤
+  │ agent://log              │ sessionId, level, message                                                            │ 日志流                   │
+  ├──────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────┼──────────────────────────┤
+  │ agent://session-complete │ sessionId, mode, emotion, summaryTranslation, resultRaw, resultZh, suggestionOptions │ 结果卡片渲染             │
+  ├──────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────┼──────────────────────────┤
+  │ agent://error            │ sessionId, message                                                                   │ 错误展示                 │
+  ├──────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────┼──────────────────────────┤
+  │ agent-progress           │ sessionId, stage, percent, message, rawLine                                          │ 兼容旧格式               │
+  ├──────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────┼──────────────────────────┤
+  │ agent-done               │ sessionId, resultZh                                                                  │ 兼容旧格式               │
+  ├──────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────┼──────────────────────────┤
+  │ suggestion-ready         │ sessionId, options                                                                   │ 建议选项按钮             │
+  └──────────────────────────┴──────────────────────────────────────────────────────────────────────────────────────┴──────────────────────────┘
+
+  不同模式下的 UI 已写好
+
+  MainView.tsx 第 180-192 行的状态机：
+
+  uiState === "idle"  && mode === "idle"           → InputBubble   （打字机气泡+输入框）
+  uiState === "running" || mode === "thinking"      → RunningBubble + StatusMonitor（进度条+日志）
+  uiState === "done" || mode === "complete"         → ResultCard    （结果卡片）
+  uiState === "error" || mode === "error"           → ResultCard    （错误卡片，红色样式）
+
+  ResultCard.tsx 按 mode 渲染：
+  - normal/complete：绿色头 + 情绪气泡 + 摘要文本
+  - error：红色头 + 情绪气泡 + 摘要文本
+  - 有 suggestionOptions：在底部渲染可点击选项按钮，点击后填入 task 并重置 mode 为 idle
+
+  GIF 表情已按 mode 切换：PetPreviewPanel 中 getVisualState(uiState, mode) → error→error.gif / done→complete.gif / running→thinking.gif /
+  idle→thinking.gif
+
+  前端发现的 1 个缺口
+
+  InputBubble.tsx 调用 start_agent 时没传 agent 类型：
+
+  // 第62行，当前只传了 userInputZh 和 cwd：
+  await invoke("start_agent", { userInputZh: task, cwd: projectPath || "." });
+
+  // 应该加上 selectedAgent：
+  await invoke("start_agent", {
+    userInputZh: task,
+    cwd: projectPath || ".",
+    agent: useAppStore.getState().selectedAgent,  // 缺少这一行
+  });
+
+  用户在 WelcomeView 选了 OpenCode，但 start_agent 收不到这个信息。
+
+  ---
+  二、后端技术路径（同伴要做）
+
+  前提：先修复编译
+
+  Galcode_Backend_Latest 有 3 处 git merge 冲突 + 缺失 spawn_opencode_process() + 缺失 StdoutAgentKind，必须先修好才能跑。
+
+  第 1 步：commands.rs — 接收 agent 参数
+
+  当前 start_agent 签名：
+  fn start_agent(app, state, user_input_zh: String, cwd: Option<String>)
+
+  改为：
+  fn start_agent(app, state, user_input_zh: String, cwd: Option<String>, agent: Option<String>)
+
+  根据 agent 路由：
+  agent == "opencode"  → launch_opencode_agent()
+  agent == "demo"      → launch_demo_agent()
+  agent == "claude-code" → 暂不支持，返回错误
+  空                     → 默认 opencode
+
+  第 2 步：launcher.rs — 补全 spawn_opencode_process()
+
+  参照已有的 spawn_demo_process()，新增：
+
+  pub fn spawn_opencode_process(cfg: &AgentConfig, cwd: &Path, task_en: &str)
+      -> Result<std::process::Child, String>
+  {
+      let mut cmd = Command::new(&cfg.executable);
+      cmd.args(["run", "--format", "json", "--dir"])
+         .arg(cwd)
+         .arg("--dangerously-skip-permissions")  // 自动化场景跳过权限确认
+         .arg(task_en)
+         .current_dir(cwd)
+         .stdout(Stdio::piped())
+         .stderr(Stdio::inherit());
+      for (k, v) in &cfg.env_vars {
+          cmd.env(k, v);
+      }
+      cmd.spawn().map_err(|e| format!("启动 OpenCode 失败: {}", e))
+  }
+
+  第 3 步：manager.rs — launch_opencode_agent() 的结果提取
+
+  当前 run_stdout_loop() 从 demo agent 的 type=result 提取结果。OpenCode 的输出格式不同——最后一个 text event 才是结果。需要在 from_json_line() 中新增
+  OpenCode 格式解析（之前分析过），并从最后的 text event 中提取 part.text 作为 last_result_en。
+
+  第 4 步：commands.rs — 新增 update_llm_settings 命令
+
+  前端已经在 App.tsx 挂载时和 SettingsModal 保存时调用了这个命令，后端还没有实现：
+
+  #[tauri::command]
+  fn update_llm_settings(
+      state: State<Arc<AppState>>,
+      base_url: Option<String>,
+      api_key: Option<String>,
+      nickname: Option<String>,
+      system_prompt: Option<String>,
+  ) -> Result<(), String> {
+      let mut mgr = state.manager.lock().map_err(|e| e.to_string())?;
+      if let Some(url) = base_url { mgr.llm_base_url = Some(url); }
+      if let Some(key) = api_key { mgr.llm_api_key = Some(key); }
+      if let Some(nick) = nickname { mgr.user_nickname = Some(nick); }
+      if let Some(sp) = system_prompt { mgr.user_system_prompt = Some(sp); }
+      Ok(())
+  }
+
+  需要在 AgentManager 中加字段存储这些设置，并在 load_llm_config() 或 generate_summary_emotion() 中注入。
+
+  第 5 步：llm/prompt.rs + llm/client.rs — 注入用户系统提示词
+
+  当前 generate_summary_emotion() 的 system prompt 是硬编码的。改为：
+
+  system = [用户设置的系统提示词]   ← 来自 SettingsModal（无则用默认）
+         + "\n\n"
+         + [模式判断指令]          ← 硬编码追加
+
+  模式判断指令（追加在用户提示词后面）：
+  请根据Agent执行结果，输出JSON（不要markdown代码块）:
+  {
+    "mode": "normal" | "suggestion" | "error",
+    "emotion": "用{称呼}的口吻表达的一句话，50字以内",
+    "summary": "结果的简短摘要"
+  }
+
+  模式判断规则：
+  - normal: Agent正常完成任务，结果可用
+  - suggestion: Agent完成但用户可能需要后续操作
+  - error: Agent报错、超时或无结果
+
+  第 6 步：llm/client.rs — generate_summary_emotion 输出结构加 mode
+
+  当前返回 SummaryResult { summary, emotion }，改为：
+  pub struct SummaryResult {
+      pub mode: String,    // 新增
+      pub summary: String,
+      pub emotion: String,
+  }
+
+  解析 LLM 的 JSON 响应时提取 mode 字段。
+
+  第 7 步：manager.rs — SessionCompletePayload 填入 mode
+
+  在 emit agent://session-complete 时，把 mode 传入 payload（当前可能缺失这个字段）。
+
+  ---
+  三、完整数据流
+
+  1. WelcomeView:
+     用户选文件夹选agent → 点"启动" → setIsStarted(true)
+
+  2. MainView → InputBubble:
+     用户输任务 → 点"启动" → invoke("start_agent", { userInputZh, cwd, agent })
+
+  3. Rust start_agent:
+     a. 读取 AgentManager 中的 llm 设置
+     b. translate_zh_to_en(用户任务)
+     c. 根据 agent 类型启动子进程（opencode run --format json ...）
+     d. 开线程跑 run_stdout_loop()
+
+  4. run_stdout_loop() 每行:
+     a. 解析 JSONL → HookEvent
+     b. reduce_event() → SideEffect
+     c. apply_side_effects() → emit agent://status-changed / agent://log
+     d. 进度条实时更新
+
+  5. Agent 进程结束:
+     a. 捕获最后 text event → result_en
+     b. translate_en_to_zh(result_en) → result_zh
+     c. generate_summary_emotion(
+          system = 用户提示词 + 模式判断指令 + "称呼={用户昵称}",
+          user = 原始任务 + result_zh
+        ) → { mode, emotion, summary }
+     d. emit("agent://session-complete", {
+          mode: "normal"|"suggestion"|"error",
+          emotion: "搞定了团长~",
+          summaryTranslation: "已完成下载脚本编写...",
+          resultZh: "1. 创建...\n2. 实现...",
+          suggestionOptions: ["加个错误处理", "不用了"]
+        })
+
+  6. 前端 useAgentIPC:
+     收到 session-complete → store.setMode("normal") → ResultCard 出现
+     用户点建议按钮 → setTask("加个错误处理") → setMode("idle") → InputBubble 出现
+     → 下一轮对话
+
+  ---
+  四、分工总结
+
+  ┌──────┬───────────────────────────────────────────────┬────────────────────────────────────┐
+  │  谁  │                    做什么                     │                文件                │
+  ├──────┼───────────────────────────────────────────────┼────────────────────────────────────┤
+  │ 你   │ InputBubble 的 start_agent 加 agent 参数      │ InputBubble.tsx 第62行             │
+  ├──────┼───────────────────────────────────────────────┼────────────────────────────────────┤
+  │ 同伴 │ 修复 merge 冲突 + 补全 spawn_opencode_process │ config.rs, launcher.rs, manager.rs │
+  ├──────┼───────────────────────────────────────────────┼────────────────────────────────────┤
+  │ 同伴 │ start_agent 接收 agent 参数并路由             │ commands.rs                        │
+  ├──────┼───────────────────────────────────────────────┼────────────────────────────────────┤
+  │ 同伴 │ 新增 update_llm_settings 命令                 │ commands.rs, manager.rs            │
+  ├──────┼───────────────────────────────────────────────┼────────────────────────────────────┤
+  │ 同伴 │ LLM prompt 注入用户设置 + mode 输出           │ llm/prompt.rs, llm/client.rs       │
+  ├──────┼───────────────────────────────────────────────┼────────────────────────────────────┤
+  │ 同伴 │ SessionCompletePayload 填入 mode              │ manager.rs, ipc/events.rs          │
+  └──────┴───────────────────────────────────────────────┴────────────────────────────────────┘
+
+  后端改完后，你只需确认 SessionCompletePayload 的 mode 字段值（"normal" / "suggestion" / "error"）和前端 ResultCard.tsx 的判断逻辑一致即可。
+
+  注意：当前缺少 mode === "suggestion" 的显式条件。ResultCard 在 suggestion 模式下仍然用 mode === "complete" 来显示（绿色头），需要修复。
+
+  环节 3：ResultCard.tsx 渲染
+
+  ┌────────────────────┬──────────────┬────────────────────┐
+  │     store 字段     │   渲染位置   │      模式差异      │
+  ├────────────────────┼──────────────┼────────────────────┤
+  │ emotionText        │ 气泡框，大字 │ 所有模式都显示     │
+  ├────────────────────┼──────────────┼────────────────────┤
+  │ summaryTranslation │ 摘要文本区   │ 所有模式都显示     │
+  ├────────────────────┼──────────────┼────────────────────┤
+  │ suggestionOptions  │ 底部按钮     │ 有则显示，无则隐藏 │
+  ├────────────────────┼──────────────┼────────────────────┤
+  │ mode               │ 头部颜色     │ error→红 / 其他→绿 │
+  └────────────────────┴──────────────┴────────────────────┘
+
+  结论：前端链条完整，只等后端发数据。
+
+  环节 4：建议选项 → 下一轮对话
+
+  ResultCard 的建议按钮点击后（第 48-57 行）：
+  const handleOptionClick = (opt: string) => {
+    setTask(opt);       // 填入 textarea
+    setUiState("idle"); // 切换回 InputBubble
+    setMode("idle");
+  };
+
+  InputBubble 重新出现，textarea 已填入选项文字，用户点"启动"开始下一轮。
+
+  需要修复的一处
+
+  MainView.tsx 的 ResultCard 触发条件需要加入 mode === "suggestion"：
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(~\Desktop\Galcode_island_merge\src\components\MainView.tsx)
+  ⎿  Added 1 line, removed 1 line
+      186                <RunningBubble key="running-bubble" />
+      187              )}
+      188
+      189 -            {(uiState === "done" || uiState === "error" || mode === "complete" || mode === "error") && (
+      189 +            {(uiState === "done" || uiState === "error" || mode === "complete" || mode === "suggestion" || mode === "error") && (
+      190                <ResultCard key="result-card" />
+      191              )}
+      192            </AnimatePresence>
+
+● PowerShell(cd "C:\Users\shiju\Desktop\Galcode_island_merge"; npx tsc --noEmit; echo "EXIT: $LASTEXITCODE")
+  ⎿  EXIT: 0
+  ⎿  
+     Shell cwd was reset to C:\Users\shiju\Desktop\Galcode_island
+
+● TypeScript clean。总结如下。
+
+  ---
+  完整链条验证
+
+  前端 → 后端数据流（所有参数已齐）
+
+  WelcomeView                          InputBubble
+    │                                     │
+    ├─ open({ directory: true })          │
+    │  → setProjectPath("/home/proj")     │
+    │                                     │
+    ├─ setSelectedAgent("opencode")       │
+    │                                     │
+    └─ setIsStarted(true)                 │
+       ─────────────────────────────────→ │
+                                          ├─ 打字机气泡 + 输入框
+                                          ├─ 用户输入 "帮我写下载脚本"
+                                          └─ invoke("start_agent", {
+                                               userInputZh: "帮我写下载脚本",
+                                               cwd: "/home/proj",
+                                               agent: "opencode"   ← 刚修复
+                                             })
+
+  三个参数都传齐了： userInputZh（任务）、cwd（目标文件夹）、agent（用户选的 Agent 类型）。
+
+  ---
+  前端接收 → 模式渲染全链路
+
+  后端 emit("agent://session-complete", {
+    mode: "complete",               // "complete" | "suggestion" | "error"
+    emotion: "搞定了团长~",          // 春日口吻
+    summaryTranslation: "...",      // 结果摘要
+    suggestionOptions: ["加错误处理", "不用了"]
+  })
+    │
+    ▼
+  useAgentIPC.ts (已写好)
+    store.setMode("complete")
+    store.setEmotionText("搞定了团长~")
+    store.setSummaryTranslation("...")
+    store.setSuggestionOptions(["加错误处理", "不用了"])
+    store.setUiState("done")
+    │
+    ▼
+  MainView.tsx (已写好，刚补了 suggestion)
+    mode === "complete"    → ResultCard ✅
+    mode === "suggestion"  → ResultCard ✅ (刚修复)
+    mode === "error"       → ResultCard ✅
+    │
+    ▼
+  ResultCard.tsx (已写好)
+    emotionText → 春日气泡框
+    summaryTranslation → 摘要文本
+    suggestionOptions → 可点击按钮
+    按钮点击 → setTask(选项) → 回到 InputBubble
+
+  前端所有链条已通，只等后端按这个 payload 格式发事件。
+
+  ---
+  三、后端怎么做——启动链技术路径
+
+  核心问题：用户选文件夹 + 选 Agent 后，后端怎么在指定文件夹启动指定 Agent
+
+  入口：commands.rs::start_agent() 收到三个参数：
+
+  userInputZh = "帮我写下载脚本"
+  cwd         = "/home/shiju/proj"    ← 用户在 WelcomeView 选的文件夹
+  agent       = "opencode"            ← 用户在 WelcomeView 选的 Agent
+
+  后端要做的事（按调用顺序）：
+
+  步骤 1：commands.rs — 路由 Agent 类型
+
+  #[tauri::command]
+  fn start_agent(
+      app: AppHandle,
+      state: State<Arc<AppState>>,
+      user_input_zh: String,
+      cwd: Option<String>,
+      agent: Option<String>,  // 新增参数，前端已经在传了
+  ) -> Result<LaunchResult, String> {
+      let cwd = cwd.unwrap_or_else(|| ".".to_string());
+      let agent_type = agent.unwrap_or_else(|| "opencode".to_string());
+
+      match agent_type.as_str() {
+          "opencode" => manager::launch_opencode_agent(app, state, cwd, user_input_zh),
+          "demo"     => manager::launch_demo_agent(app, state, cwd, user_input_zh),
+          _          => Err(format!("不支持的 Agent: {}", agent_type)),
+      }
+  }
+
+  步骤 2：launcher.rs — 创建 OpenCode 子进程，工作目录设为 cwd
+
+  pub fn spawn_opencode_process(cfg: &AgentConfig, cwd: &Path, task_en: &str)
+      -> Result<std::process::Child, String>
+  {
+      Command::new(&cfg.executable)
+          .args(["run", "--format", "json", "--dir"])
+          .arg(cwd)                           // ← 关键：在用户选的文件夹里执行
+          .arg("--dangerously-skip-permissions")
+          .arg(task_en)                        // ← 已翻译的英文任务
+          .current_dir(cwd)                    // ← Rust 进程自己也 cd 到该目录
+          .stdout(Stdio::piped())              // ← stdout 被父进程捕获
+          .stderr(Stdio::inherit())            // ← stderr 打印到终端
+          .spawn()
+  }
+
+  实际执行的命令等价于在终端跑：
+  cd /home/shiju/proj
+  opencode run --format json --dir /home/shiju/proj --dangerously-skip-permissions "Write a download script"
+
+  步骤 3：manager.rs — launch_opencode_agent() 核心流程
+
+  1. LLM 翻译：translate_zh_to_en("帮我写下载脚本") → "Write a download script"
+  2. spawn_opencode_process() → stdout 管道
+  3. 创建 AgentSession，记录 session_id
+  4. 开线程 run_stdout_loop():
+     ├─ 逐行读取 stdout (JSONL)
+     ├─ from_json_line() 解析每行
+     ├─ reduce_event() 更新状态
+     ├─ apply_side_effects() emit 事件
+     │   ├─ agent://status-changed (进度实时推前端)
+     │   └─ agent://log (日志推前端)
+     ├─ Agent 进程退出
+     ├─ translate_en_to_zh(英文结果) → 中文结果
+     ├─ generate_summary_emotion(
+     │     system = 用户系统提示词 + "输出 mode + emotion + summary",
+     │     user   = 用户原始输入 + 中文结果
+     │   )
+     │   → { mode: "complete", emotion: "搞定了团长~", summary: "..." }
+     └─ emit("agent://session-complete", {
+          mode: "complete",
+          emotion: "搞定了团长~",
+          summaryTranslation: "...",
+          resultZh: "1. 创建下载脚本...",
+          suggestionOptions: ["加错误处理", "不用了"]
+        })
+
+  步骤 4：commands.rs — 新增 update_llm_settings
+
+  前端 SettingsModal 保存时和 App.tsx 挂载时都会调用。后端需要接收：
+
+  #[tauri::command]
+  fn update_llm_settings(
+      state: State<Arc<AppState>>,
+      base_url: Option<String>,
+      api_key: Option<String>,
+      nickname: Option<String>,
+      system_prompt: Option<String>,
+  ) -> Result<(), String> {
+      // 存入 AgentManager 或全局配置
+      // 后续 generate_summary_emotion() 时注入
+  }
+
+  步骤 5：llm/client.rs — 注入用户设置到 system prompt
+
+  generate_summary_emotion() 的 system prompt 拼接逻辑：
+
+  [用户设置的系统提示词]          ← 来自 SettingsModal（如"你是凉宫春日，SOS团长..."）
+  +
+  [称呼替换]                    ← 来自 SettingsModal 的 nickname
+  +
+  [模式判断指令]                 ← 硬编码，不暴露给用户：
+  "请根据 Agent 执行结果，输出纯 JSON（不含 markdown 代码块）:
+  {
+    \"mode\": \"complete\" | \"suggestion\" | \"error\",
+    \"emotion\": \"用春日口吻表达的一句话，50字以内\",
+    \"summary\": \"结果的简短摘要（100字以内）\"
+  }
+  判断规则：
+  - complete: Agent 正常完成任务
+  - suggestion: Agent 完成但用户可能需要后续操作，options 数组填建议选项
+  - error: Agent 报错或无结果"
+
+  SummaryResult 结构体加 mode 字段：
+  pub struct SummaryResult {
+      pub mode: String,      // 新增
+      pub summary: String,
+      pub emotion: String,
+  }
+
+  ---
+  四、需要改的后端文件清单
+
+  ┌───────────────┬─────────────────────────────────────────────────────────────────────────────────┐
+  │     文件      │                                    改动内容                                     │
+  ├───────────────┼─────────────────────────────────────────────────────────────────────────────────┤
+  │ commands.rs   │ start_agent 加 agent: Option<String> 参数，路由到不同 launcher                  │
+  ├───────────────┼─────────────────────────────────────────────────────────────────────────────────┤
+  │ commands.rs   │ 新增 update_llm_settings 命令                                                   │
+  ├───────────────┼─────────────────────────────────────────────────────────────────────────────────┤
+  │ launcher.rs   │ 补全 spawn_opencode_process() 函数                                              │
+  ├───────────────┼─────────────────────────────────────────────────────────────────────────────────┤
+  │ manager.rs    │ 修复 merge 冲突，AgentManager 加 llm 设置字段                                   │
+  ├───────────────┼─────────────────────────────────────────────────────────────────────────────────┤
+  │ manager.rs    │ SessionCompletePayload 填入 mode                                                │
+  ├───────────────┼─────────────────────────────────────────────────────────────────────────────────┤
+  │ llm/client.rs │ SummaryResult 加 mode 字段，generate_summary_emotion 注入用户 prompt + nickname │
+  ├───────────────┼─────────────────────────────────────────────────────────────────────────────────┤
+  │ ipc/events.rs │ SessionCompletePayload 确认有 mode 字段                                         │
+  ├───────────────┼─────────────────────────────────────────────────────────────────────────────────┤
+  │ config.rs     │ 修复 merge 冲突                                                                 │
+  └───────────────┴─────────────────────────────────────────────────────────────────────────────────┘

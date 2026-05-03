@@ -27,6 +27,7 @@ pub fn preset_demo() -> AgentConfig {
     }
 }
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 =======
 
 /// Resolve OpenCode CLI path: `OPENCODE_BIN`, then `GALCODE_OPENCODE_BIN`, then
@@ -69,8 +70,19 @@ pub fn opencode_agent_config(app: &AppHandle) -> AgentConfig {
     AgentConfig {
         name: "opencode".into(),
         executable: resolve_opencode_executable(app),
+=======
+
+/// Empty `executable` means resolve OpenCode CLI next to the app binary / PATH at spawn time.
+pub fn preset_opencode() -> AgentConfig {
+    AgentConfig {
+        name: "opencode".into(),
+        executable: String::new(),
+>>>>>>> Stashed changes
         args: vec![],
         env_vars: HashMap::new(),
     }
 }
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
 >>>>>>> Stashed changes

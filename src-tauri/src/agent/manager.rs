@@ -1,8 +1,13 @@
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 use super::config::preset_demo;
 use super::launcher::{resolve_demo_script, spawn_demo_process};
 =======
 use super::config::{opencode_agent_config, preset_demo};
+use super::launcher::{resolve_demo_script, spawn_demo_process, spawn_opencode_process};
+>>>>>>> Stashed changes
+=======
+use super::config::{preset_demo, preset_opencode};
 use super::launcher::{resolve_demo_script, spawn_demo_process, spawn_opencode_process};
 >>>>>>> Stashed changes
 use crate::hook::event::HookEvent;
@@ -173,8 +178,12 @@ pub fn launch_demo_agent(
             trimmed,
             llm,
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 =======
             StdoutAgentKind::Demo,
+=======
+            StdoutParserKind::Demo,
+>>>>>>> Stashed changes
         );
     });
 
@@ -195,6 +204,11 @@ pub fn launch_opencode_agent(
         return Err("任务内容不能为空".into());
     }
 
+<<<<<<< Updated upstream
+=======
+    crate::agent::launcher::resolve_opencode_executable()?;
+
+>>>>>>> Stashed changes
     let llm = load_llm_config();
     let task_for_agent = match &llm {
         Some(cfg) => translate_zh_to_en(cfg, &trimmed).unwrap_or_else(|_| trimmed.clone()),
@@ -202,6 +216,7 @@ pub fn launch_opencode_agent(
     };
 
     let cwd_path = PathBuf::from(&cwd);
+<<<<<<< Updated upstream
     let cfg = opencode_agent_config(&app);
 
     let mut child = spawn_opencode_process(&cfg, &cwd_path, &task_for_agent).map_err(|e| {
@@ -210,6 +225,11 @@ pub fn launch_opencode_agent(
             e
         )
     })?;
+=======
+    let cfg = preset_opencode();
+
+    let mut child = spawn_opencode_process(&cfg, &cwd_path, &task_for_agent)?;
+>>>>>>> Stashed changes
     let pid = child.id();
     let stdout = child
         .stdout
@@ -241,7 +261,11 @@ pub fn launch_opencode_agent(
             session_id: session_id.clone(),
             status: AgentStatus::Running,
             tool_name: None,
+<<<<<<< Updated upstream
             tool_description: Some("OpenCode agent started".into()),
+=======
+            tool_description: Some("OpenCode started".into()),
+>>>>>>> Stashed changes
             percent: Some(0.0),
         },
     );
@@ -257,7 +281,11 @@ pub fn launch_opencode_agent(
             stdout,
             trimmed,
             llm,
+<<<<<<< Updated upstream
             StdoutAgentKind::OpenCode,
+>>>>>>> Stashed changes
+=======
+            StdoutParserKind::OpenCode,
 >>>>>>> Stashed changes
         );
     });
@@ -285,6 +313,12 @@ fn push_log(logs: &Arc<Mutex<Vec<String>>>, line: String) {
     }
 }
 
+#[derive(Clone, Copy)]
+enum StdoutParserKind {
+    Demo,
+    OpenCode,
+}
+
 fn run_stdout_loop(
     app: AppHandle,
     state: Arc<AppState>,
@@ -292,6 +326,7 @@ fn run_stdout_loop(
     stdout: std::process::ChildStdout,
     user_zh: String,
     llm: Option<LlmConfig>,
+    parser: StdoutParserKind,
 ) {
     let (snapshot, logs, child_slot) = {
         let mgr = match state.manager.lock() {
@@ -310,6 +345,7 @@ fn run_stdout_loop(
 
     let reader = BufReader::new(stdout);
     let mut last_result_en: Option<String> = None;
+    let mut opencode_stream_error = false;
 
     for line in reader.lines().flatten() {
         let line = line.trim().to_string();
@@ -318,50 +354,135 @@ fn run_stdout_loop(
         }
         push_log(&logs, line.clone());
 
-        if let Some(ev) = HookEvent::from_json_line(&line) {
-            if ev.event_name == "Stop" {
-                last_result_en = ev
-                    .raw_json
-                    .get("output_en")
-                    .and_then(|x| x.as_str())
-                    .map(|s| s.to_string())
-                    .or_else(|| {
-                        ev.raw_json
-                            .get("output")
+        match parser {
+            StdoutParserKind::Demo => {
+                if let Some(ev) = HookEvent::from_json_line(&line) {
+                    if ev.event_name == "Stop" {
+                        last_result_en = ev
+                            .raw_json
+                            .get("output_en")
                             .and_then(|x| x.as_str())
                             .map(|s| s.to_string())
-                    });
+                            .or_else(|| {
+                                ev.raw_json
+                                    .get("output")
+                                    .and_then(|x| x.as_str())
+                                    .map(|s| s.to_string())
+                            });
+                    }
+
+                    let effects = {
+                        let mut snap = match snapshot.lock() {
+                            Ok(g) => g,
+                            Err(_) => continue,
+                        };
+                        reduce_event(&mut snap, &ev)
+                    };
+                    crate::ipc::events::apply_side_effects(&app, &session_id, effects);
+
+                    legacy_emit_progress(&app, &session_id, &ev);
+                } else {
+                    let _ = app.emit(
+                        "agent-progress",
+                        serde_json::json!({
+                            "stage": "log",
+                            "rawLine": line.clone(),
+                            "sessionId": session_id,
+                        }),
+                    );
+                    let _ = app.emit(
+                        "agent://log",
+                        events::LogPayload {
+                            session_id: session_id.clone(),
+                            level: "debug".into(),
+                            message: line.clone(),
+                            timestamp: chrono::Utc::now().to_rfc3339(),
+                        },
+                    );
+                }
             }
-
-            let effects = {
-                let mut snap = match snapshot.lock() {
-                    Ok(g) => g,
-                    Err(_) => continue,
+            StdoutParserKind::OpenCode => {
+                let v: serde_json::Value = match serde_json::from_str(&line) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        let _ = app.emit(
+                            "agent-progress",
+                            serde_json::json!({
+                                "stage": "log",
+                                "rawLine": line.clone(),
+                                "sessionId": session_id,
+                            }),
+                        );
+                        let _ = app.emit(
+                            "agent://log",
+                            events::LogPayload {
+                                session_id: session_id.clone(),
+                                level: "debug".into(),
+                                message: line.clone(),
+                                timestamp: chrono::Utc::now().to_rfc3339(),
+                            },
+                        );
+                        continue;
+                    }
                 };
-                reduce_event(&mut snap, &ev)
-            };
-            crate::ipc::events::apply_side_effects(&app, &session_id, effects);
 
-            // Legacy compatibility for existing UI listeners during migration
-            legacy_emit_progress(&app, &session_id, &ev);
-        } else {
-            let _ = app.emit(
-                "agent-progress",
-                serde_json::json!({
-                    "stage": "log",
-                    "rawLine": line.clone(),
-                    "sessionId": session_id,
-                }),
-            );
-            let _ = app.emit(
-                "agent://log",
-                events::LogPayload {
-                    session_id: session_id.clone(),
-                    level: "debug".into(),
-                    message: line.clone(),
-                    timestamp: chrono::Utc::now().to_rfc3339(),
-                },
-            );
+                match v.get("type").and_then(|t| t.as_str()) {
+                    Some("text") => {
+                        if let Some(t) = v.pointer("/part/text").and_then(|x| x.as_str()) {
+                            last_result_en = Some(t.to_string());
+                        }
+                        let _ = app.emit(
+                            "agent://log",
+                            events::LogPayload {
+                                session_id: session_id.clone(),
+                                level: "debug".into(),
+                                message: line.clone(),
+                                timestamp: chrono::Utc::now().to_rfc3339(),
+                            },
+                        );
+                    }
+                    Some("error") => {
+                        opencode_stream_error = true;
+                        let msg = v
+                            .pointer("/error/data/message")
+                            .and_then(|x| x.as_str())
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| "OpenCode session error".into());
+                        emit_err(&app, &session_id, &msg, "OPENCODE_ERROR");
+                    }
+                    _ => {
+                        if let Some(ev) = HookEvent::from_opencode_stream_value(&v) {
+                            let effects = {
+                                let mut snap = match snapshot.lock() {
+                                    Ok(g) => g,
+                                    Err(_) => continue,
+                                };
+                                reduce_event(&mut snap, &ev)
+                            };
+                            crate::ipc::events::apply_side_effects(&app, &session_id, effects);
+                            legacy_emit_progress(&app, &session_id, &ev);
+                        } else {
+                            let _ = app.emit(
+                                "agent-progress",
+                                serde_json::json!({
+                                    "stage": "log",
+                                    "rawLine": line.clone(),
+                                    "sessionId": session_id,
+                                }),
+                            );
+                            let _ = app.emit(
+                                "agent://log",
+                                events::LogPayload {
+                                    session_id: session_id.clone(),
+                                    level: "debug".into(),
+                                    message: line.clone(),
+                                    timestamp: chrono::Utc::now().to_rfc3339(),
+                                },
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -373,16 +494,25 @@ fn run_stdout_loop(
         let _ = c.wait();
     }
 
+    if opencode_stream_error {
+        if let Ok(mut s) = snapshot.lock() {
+            s.status = AgentStatus::Error;
+        }
+        clear_active_demo_session(&state, &session_id);
+        return;
+    }
+
     let Some(result_en) = last_result_en else {
         if let Ok(mut s) = snapshot.lock() {
             s.status = AgentStatus::Error;
         }
-        emit_err(
-            &app,
-            &session_id,
-            "Agent 未返回结构化结果（缺少 type=result）",
-            "MISSING_RESULT",
-        );
+        let detail = match parser {
+            StdoutParserKind::Demo => "Agent 未返回结构化结果（缺少 type=result）",
+            StdoutParserKind::OpenCode => {
+                "OpenCode 未产生可用的文本结果（缺少 type=text 的 part.text）"
+            }
+        };
+        emit_err(&app, &session_id, detail, "MISSING_RESULT");
         clear_active_demo_session(&state, &session_id);
         return;
     };

@@ -36,7 +36,11 @@ export function LaunchButton(): JSX.Element {
       const res = await invoke<{ sessionId?: string }>("start_agent", {
         userInputZh: task,
         cwd: projectPath || ".",
+<<<<<<< Updated upstream
         selectedAgent,
+=======
+        agent: selectedAgent,
+>>>>>>> Stashed changes
       });
       const sid = res?.sessionId ?? null;
       setSessionId(sid);
@@ -50,7 +54,12 @@ export function LaunchButton(): JSX.Element {
       });
     }
   }, [
+<<<<<<< Updated upstream
     task, projectPath, selectedAgent, clearLogs, setResultZh, setSummaryText, setEmotionText,
+=======
+    selectedAgent,
+    task, projectPath, clearLogs, setResultZh, setSummaryText, setEmotionText,
+>>>>>>> Stashed changes
     setSuggestion, setPercent, setUiState, setLastStage, setBubble,
     setSessionId, addLogEntry,
   ]);

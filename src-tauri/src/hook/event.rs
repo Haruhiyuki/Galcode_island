@@ -82,4 +82,80 @@ impl HookEvent {
 
         None
     }
+
+    /// Maps OpenCode `run --format json` JSONL (`serde_json::Value`) to hook-shaped events for shared UI handling.
+    pub fn from_opencode_stream_value(v: &Value) -> Option<Self> {
+        let typ = v.get("type").and_then(|t| t.as_str())?;
+        match typ {
+            "tool_use" => {
+                let tool = v
+                    .pointer("/part/tool")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("tool")
+                    .to_string();
+                let title = v
+                    .pointer("/part/state/title")
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| tool.clone());
+                let msg = format!("{} — {}", tool, title);
+                Some(HookEvent {
+                    event_name: "DemoProgress".into(),
+                    session_id: None,
+                    tool_name: Some(tool),
+                    tool_use_id: v
+                        .pointer("/part/callID")
+                        .and_then(|x| x.as_str())
+                        .map(|s| s.to_string()),
+                    tool_input: v.pointer("/part/state/input").cloned(),
+                    cwd: None,
+                    model: None,
+                    agent_id: None,
+                    raw_json: serde_json::json!({
+                        "stage": "working",
+                        "message": msg,
+                        "percent": serde_json::Value::Null,
+                    }),
+                })
+            }
+            "step_start" => Some(HookEvent {
+                event_name: "DemoProgress".into(),
+                session_id: None,
+                tool_name: None,
+                tool_use_id: None,
+                tool_input: None,
+                cwd: None,
+                model: None,
+                agent_id: None,
+                raw_json: serde_json::json!({
+                    "stage": "thinking",
+                    "message": "OpenCode step started…",
+                    "percent": serde_json::Value::Null,
+                }),
+            }),
+            "step_finish" => {
+                let reason = v.pointer("/part/reason").and_then(|x| x.as_str());
+                if reason == Some("stop") {
+                    Some(HookEvent {
+                        event_name: "DemoProgress".into(),
+                        session_id: None,
+                        tool_name: None,
+                        tool_use_id: None,
+                        tool_input: None,
+                        cwd: None,
+                        model: None,
+                        agent_id: None,
+                        raw_json: serde_json::json!({
+                            "stage": "done",
+                            "message": "OpenCode finished.",
+                            "percent": 100.0,
+                        }),
+                    })
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
 }
