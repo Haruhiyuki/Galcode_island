@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../../stores/useAppStore";
@@ -17,10 +17,14 @@ export function InputBubble(): JSX.Element {
   const displayNickname = nickname.trim() ? nickname : "部员";
   
   const projectPath = useAppStore((s) => s.projectPath);
+  const uiState = useAppStore((s) => s.uiState);
   const agentStatus = useAppStore((s) => s.agentStatus);
+  const mode = useAppStore((s) => s.mode);
   const setUiState = useAppStore((s) => s.setUiState);
   const setMode = useAppStore((s) => s.setMode);
   const setAgentStatus = useAppStore((s) => s.setAgentStatus);
+  const setSessionId = useAppStore((s) => s.setSessionId);
+  const clearTodos = useAppStore((s) => s.clearTodos);
   const addLogEntry = useAppStore((s) => s.addLogEntry);
 
   const [greeting, setGreeting] = useState("");
@@ -30,7 +34,7 @@ export function InputBubble(): JSX.Element {
 
   // Random greeting Selection
   useEffect(() => {
-    if (agentStatus === "idle") {
+    if (agentStatus === "idle" || agentStatus === "completed") {
       const g = GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
       setGreeting(g.replace(/\[称呼\]/g, displayNickname));
       setDisplayedGreeting("");
@@ -39,7 +43,7 @@ export function InputBubble(): JSX.Element {
 
   // Typewriter effect
   useEffect(() => {
-    if (!greeting || agentStatus !== "idle") return;
+    if (!greeting || (agentStatus !== "idle" && agentStatus !== "completed")) return;
     
     let currentIndex = 0;
     const intervalId = setInterval(() => {
@@ -53,18 +57,20 @@ export function InputBubble(): JSX.Element {
     return () => clearInterval(intervalId);
   }, [greeting, agentStatus]);
 
+  const showInput = uiState === "idle" && (mode === "idle" || !mode);
+
   const handleLaunch = async () => {
     if (!task.trim()) return;
-    const selectedAgent = useAppStore.getState().selectedAgent;
     try {
+      clearTodos();
       setUiState("running");
       setMode("working");
       setAgentStatus("running");
-      await invoke("start_agent", {
+      const result = await invoke<{ sessionId: string; status: string }>("start_agent", {
         userInputZh: task,
         cwd: projectPath || ".",
-        agent: selectedAgent,
       });
+      setSessionId(result.sessionId);
     } catch (err) {
       addLogEntry({
         timestamp: Date.now(),
@@ -79,7 +85,7 @@ export function InputBubble(): JSX.Element {
 
   return (
     <AnimatePresence>
-      {agentStatus === "idle" && (
+      {showInput && (
         <motion.div
           initial={{ opacity: 0, scale: 0.9, x: -10, y: 10 }}
           animate={{ opacity: 1, scale: 1, x: 0, y: 0 }}

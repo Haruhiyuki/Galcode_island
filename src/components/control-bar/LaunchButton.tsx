@@ -13,33 +13,37 @@ export function LaunchButton(): JSX.Element {
   const setBubble = useAppStore((s) => s.setBubble);
   const setPercent = useAppStore((s) => s.setPercent);
   const setResultZh = useAppStore((s) => s.setResultZh);
-  const setSummaryText = useAppStore((s) => s.setSummaryText);
+  const setSummaryTranslation = useAppStore((s) => s.setSummaryTranslation);
   const setEmotionText = useAppStore((s) => s.setEmotionText);
-  const setSuggestion = useAppStore((s) => s.setSuggestion);
+  const setSuggestionOptions = useAppStore((s) => s.setSuggestionOptions);
+  const setAgentStatus = useAppStore((s) => s.setAgentStatus);
   const clearLogs = useAppStore((s) => s.clearLogs);
+  const clearTodos = useAppStore((s) => s.clearTodos);
   const addLogEntry = useAppStore((s) => s.addLogEntry);
 
   const launch = useCallback(async () => {
     clearLogs();
+    clearTodos();
     setResultZh("");
-    setSummaryText("");
+    setSummaryTranslation("");
     setEmotionText("");
-    setSuggestion("");
+    setSuggestionOptions([]);
     setPercent(0);
     setUiState("running");
+    setAgentStatus("running");
     setLastStage("init");
     setBubble("启动 Agent…");
     setSessionId(null);
 
     try {
-      const res = await invoke<{ sessionId?: string }>("start_agent", {
+      const res = await invoke<{ sessionId: string; status: string }>("start_agent", {
         userInputZh: task,
         cwd: projectPath || ".",
       });
-      const sid = res?.sessionId ?? null;
-      setSessionId(sid);
+      setSessionId(res.sessionId);
     } catch (err) {
       setUiState("error");
+      setAgentStatus("error");
       setBubble(String(err));
       addLogEntry({
         timestamp: Date.now(),
@@ -48,9 +52,21 @@ export function LaunchButton(): JSX.Element {
       });
     }
   }, [
-    task, projectPath, clearLogs, setResultZh, setSummaryText, setEmotionText,
-    setSuggestion, setPercent, setUiState, setLastStage, setBubble,
-    setSessionId, addLogEntry,
+    task,
+    projectPath,
+    clearLogs,
+    clearTodos,
+    setResultZh,
+    setSummaryTranslation,
+    setEmotionText,
+    setSuggestionOptions,
+    setPercent,
+    setUiState,
+    setAgentStatus,
+    setLastStage,
+    setBubble,
+    setSessionId,
+    addLogEntry,
   ]);
 
   const isRunning = uiState === "running";

@@ -1,6 +1,6 @@
 use super::config::preset_demo;
 use super::launcher::{resolve_demo_script, spawn_demo_process};
-use crate::hook::event::HookEvent;
+use crate::hook::event::{stop_output_from_raw, HookEvent};
 use crate::ipc::events::{self, SessionCompletePayload};
 use crate::llm::{
     generate_agent_summary, load_llm_config, translate_en_to_zh,
@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 pub struct AgentSession {
@@ -42,6 +42,8 @@ impl AgentSession {
 pub struct AgentManager {
     pub sessions: HashMap<String, AgentSession>,
     pending_permission: HashMap<(String, String), ()>,
+    /// OpenCode local server port for `permission/:id/reply` (session_id, request_id) → port.
+    pub permission_opencode_ports: HashMap<(String, String), u16>,
     /// Last demo session started via `start_agent` / `launch_agent` (for plan-compat `stop_agent` without id).
     pub active_demo_session: Option<String>,
 }
@@ -51,6 +53,7 @@ impl AgentManager {
         Self {
             sessions: HashMap::new(),
             pending_permission: HashMap::new(),
+            permission_opencode_ports: HashMap::new(),
             active_demo_session: None,
         }
     }
@@ -85,16 +88,141 @@ impl AgentManager {
         &mut self,
         session_id: &str,
         tool_use_id: &str,
-        _decision: &str,
+        decision: &str,
     ) -> Result<(), String> {
-        self.pending_permission
-            .remove(&(session_id.to_string(), tool_use_id.to_string()));
-        log::info!(
-            "respond_permission (stub): session={} tool_use_id={}",
-            session_id,
-            tool_use_id
-        );
+        let key = (session_id.to_string(), tool_use_id.to_string());
+        self.pending_permission.remove(&key);
+        if let Some(port) = self.permission_opencode_ports.remove(&key) {
+            let reply = if decision.eq_ignore_ascii_case("allow")
+                || decision.eq_ignore_ascii_case("always")
+            {
+                "once"
+            } else {
+                "reject"
+            };
+            let url = format!(
+                "http://127.0.0.1:{}/permission/{}/reply",
+                port, tool_use_id
+            );
+            match reqwest::blocking::Client::builder()
+                .timeout(Duration::from_secs(45))
+                .build()
+            {
+                Ok(client) => {
+                    let _ = client
+                        .post(&url)
+                        .json(&serde_json::json!({
+                            "reply": reply,
+                            "message": "galcode",
+                        }))
+                        .send();
+                    log::info!("respond_permission → OpenCode POST {}", url);
+                }
+                Err(e) => log::warn!("respond_permission http client: {}", e),
+            }
+        } else {
+            log::info!(
+                "respond_permission (no OpenCode port): session={} tool_use_id={}",
+                session_id,
+                tool_use_id
+            );
+        }
         Ok(())
+    }
+}
+
+/// After an external OpenCode hook reports `Stop`, run CN summary pipeline and notify the UI.
+pub fn finalize_external_stop(app: &AppHandle, state: &Arc<AppState>, session_id: &str) {
+    let (user_zh, result_en, agent_type) = {
+        let mgr = match state.manager.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        let Some(sess) = mgr.sessions.get(session_id) else {
+            return;
+        };
+        let snap = match sess.snapshot.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        if snap.agent_type != "opencode" {
+            return;
+        }
+        (
+            snap.last_user_prompt.clone().unwrap_or_default(),
+            snap.last_assistant_message.clone().unwrap_or_default(),
+            snap.agent_type.clone(),
+        )
+    };
+    let _ = agent_type;
+    if result_en.is_empty() {
+        log::info!("finalize_external_stop: empty result for {}", session_id);
+        return;
+    }
+
+    let llm = load_llm_config();
+    let result_zh = match &llm {
+        Some(cfg) => translate_en_to_zh(cfg, &result_en).unwrap_or_else(|_| result_en.clone()),
+        None => result_en.clone(),
+    };
+
+    let (mode, emotion, summary, suggestion_options) = match &llm {
+        Some(cfg) => match generate_agent_summary(cfg, &user_zh, &result_zh) {
+            Ok(s) => (
+                Some(s.mode.clone()),
+                Some(s.emotion_speech.clone()),
+                Some(s.summary_translation.clone()),
+                Some(s.next_options.clone()),
+            ),
+            Err(e) => (
+                Some("error".into()),
+                Some(format!("总结生成失败: {e}（已保留下方完整结果。）")),
+                None,
+                Some(vec![]),
+            ),
+        },
+        None => (
+            Some("complete".into()),
+            Some("OpenCode 会话结束。（未配置 LLM：下方为结果全文。）".into()),
+            None,
+            Some(vec!["（未配置 API Key）".into()]),
+        ),
+    };
+
+    if let Ok(mgr) = state.manager.lock() {
+        if let Some(sess) = mgr.sessions.get(session_id) {
+            if let Ok(mut s) = sess.snapshot.lock() {
+                s.status = AgentStatus::Completed;
+                s.last_assistant_message = Some(result_zh.clone());
+            }
+        }
+    }
+
+    let _ = app.emit(
+        "agent://session-complete",
+        SessionCompletePayload {
+            session_id: session_id.to_string(),
+            mode: mode.clone(),
+            emotion: emotion.clone(),
+            summary_translation: summary.clone(),
+            result_raw: Some(result_en.clone()),
+            result_zh: Some(result_zh.clone()),
+            suggestion_options: suggestion_options.clone(),
+        },
+    );
+    let _ = app.emit(
+        "agent-done",
+        serde_json::json!({
+            "resultRaw": result_en,
+            "resultZh": result_zh,
+            "sessionId": session_id,
+        }),
+    );
+    if let Some(opts) = suggestion_options {
+        let _ = app.emit(
+            "suggestion-ready",
+            serde_json::json!({ "options": opts, "sessionId": session_id }),
+        );
     }
 }
 
@@ -116,7 +244,7 @@ pub fn launch_demo_agent(
     };
 
     let cwd_path = PathBuf::from(&cwd);
-    let script = resolve_demo_script();
+    let script = resolve_demo_script()?;
     let cfg = preset_demo();
 
     let mut child = spawn_demo_process(&cfg, &cwd_path, &script, &task_for_agent)?;
@@ -183,6 +311,20 @@ pub struct LaunchResult {
     pub status: AgentStatus,
 }
 
+/// 自后向前，从已收集的 JSONL 中找最后一条可解析的 Stop/result 正文（与主循环逻辑一致，作为兜底）。
+fn best_stop_from_captured_lines(lines: &[String]) -> Option<String> {
+    for line in lines.iter().rev() {
+        if let Some(ev) = HookEvent::from_json_line(line) {
+            if ev.event_name == "Stop" {
+                if let Some(s) = stop_output_from_raw(&ev.raw_json) {
+                    return Some(s);
+                }
+            }
+        }
+    }
+    None
+}
+
 fn push_log(logs: &Arc<Mutex<Vec<String>>>, line: String) {
     if let Ok(mut g) = logs.lock() {
         g.push(line);
@@ -216,10 +358,22 @@ fn run_stdout_loop(
         )
     };
 
-    let reader = BufReader::new(stdout);
+    /* 勿用 `lines().flatten()`：非 UTF-8 行会静默丢弃，导致整段无结果。 */
+    let mut bufreader = BufReader::new(stdout);
+    let mut line_bytes: Vec<u8> = Vec::new();
     let mut last_result_en: Option<String> = None;
 
-    for line in reader.lines().flatten() {
+    loop {
+        line_bytes.clear();
+        match bufreader.read_until(b'\n', &mut line_bytes) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(e) => {
+                log::warn!("read demo stdout: {}", e);
+                break;
+            }
+        }
+        let line = String::from_utf8_lossy(&line_bytes);
         let line = line.trim().to_string();
         if line.is_empty() {
             continue;
@@ -228,17 +382,10 @@ fn run_stdout_loop(
 
         if let Some(ev) = HookEvent::from_json_line(&line) {
             if ev.event_name == "Stop" {
-                last_result_en = ev
-                    .raw_json
-                    .get("output_en")
-                    .and_then(|x| x.as_str())
-                    .map(|s| s.to_string())
-                    .or_else(|| {
-                        ev.raw_json
-                            .get("output")
-                            .and_then(|x| x.as_str())
-                            .map(|s| s.to_string())
-                    });
+                /* Do not overwrite with None: OpenCode may emit Stop without body after an earlier type=result. */
+                if let Some(body) = stop_output_from_raw(&ev.raw_json) {
+                    last_result_en = Some(body);
+                }
             }
 
             let effects = {
@@ -273,24 +420,56 @@ fn run_stdout_loop(
         }
     }
 
+    if last_result_en.is_none() {
+        if let Ok(g) = logs.lock() {
+            last_result_en = best_stop_from_captured_lines(&g);
+        }
+    }
+
     let mut guard = match child_slot.lock() {
         Ok(g) => g,
         Err(_) => return,
     };
-    if let Some(mut c) = guard.take() {
-        let _ = c.wait();
-    }
+    let child_exit: Option<i32> = if let Some(mut c) = guard.take() {
+        c.wait()
+            .ok()
+            .and_then(|st| st.code())
+    } else {
+        None
+    };
 
-    let Some(result_en) = last_result_en else {
+    let result_en = last_result_en.or_else(|| {
+        snapshot
+            .lock()
+            .ok()
+            .and_then(|g| g.last_assistant_message.clone())
+            .filter(|s| !s.trim().is_empty())
+    });
+
+    let Some(result_en) = result_en else {
         if let Ok(mut s) = snapshot.lock() {
             s.status = AgentStatus::Error;
         }
-        emit_err(
-            &app,
-            &session_id,
-            "Agent 未返回结构化结果（缺少 type=result）",
-            "MISSING_RESULT",
-        );
+        let mut detail = "Agent 未返回可解析的输出。Demo 需至少一行 JSON：`{\"type\":\"result\",\"output_en\":\"...\"}`；或 Hook 的 `Stop` 需含 output_en / output / last_assistant_message 等字段之一。".to_string();
+        if let Some(c) = child_exit {
+            use std::fmt::Write;
+            let _ = write!(&mut detail, "\n子进程退出码: {c}。");
+        }
+        if let Ok(g) = logs.lock() {
+            if !g.is_empty() {
+                use std::fmt::Write;
+                let _ = write!(&mut detail, "\n已记录 stdout（末 6 行，可能含非 JSON 提示）：\n");
+                for ln in g.iter().rev().take(6).rev() {
+                    if detail.len() > 3200 {
+                        break;
+                    }
+                    let _ = write!(&mut detail, "{ln}\n");
+                }
+            }
+        } else {
+            detail.push_str("\n（无 stdout 记录：请确认已安装 Python，且环境变量 PYTHON=python3 或 AGENT_SCRIPT 指向 demo_agent.py 绝对路径。）");
+        }
+        emit_err(&app, &session_id, &detail, "MISSING_RESULT");
         clear_active_demo_session(&state, &session_id);
         return;
     };
@@ -310,15 +489,16 @@ fn run_stdout_loop(
             ),
             Err(e) => (
                 Some("error".into()),
-                Some(format!("总结生成失败: {}", e)),
-                Some(result_zh.chars().take(400).collect::<String>()),
+                Some(format!("总结生成失败: {e}（已保留下方完整结果。）")),
+                None,
                 Some(vec![]),
             ),
         },
         None => (
             Some("complete".into()),
-            Some("任务完成！（未配置 LLM_API_KEY，使用本地占位文案）".into()),
-            Some(result_zh.chars().take(400).collect::<String>()),
+            Some("任务完成！（未配置 LLM：下方为 Agent 结果全文，无单独摘要。）".into()),
+            /* 勿填 result 截断，否则与 result_zh 长段几乎重复。 */
+            None,
             Some(vec!["（未配置 API Key）".into()]),
         ),
     };

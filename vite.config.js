@@ -2,7 +2,9 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
-const host = process.env.TAURI_DEV_HOST;
+/** Physical-device dev (optional). Desktop Tauri uses 127.0.0.1 so WebView always reaches Vite on Windows. */
+const tauriDevHost = process.env.TAURI_DEV_HOST;
+const serverHost = tauriDevHost || "127.0.0.1";
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
@@ -16,14 +18,17 @@ export default defineConfig(async () => ({
   server: {
     port: 1420,
     strictPort: true,
-    host: host || false,
-    hmr: host
+    host: serverHost,
+    hmr: tauriDevHost
       ? {
           protocol: "ws",
-          host,
+          host: tauriDevHost,
           port: 1421,
         }
-      : undefined,
+      : {
+          host: "127.0.0.1",
+          port: 1420,
+        },
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],

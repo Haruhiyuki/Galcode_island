@@ -1,5 +1,5 @@
 use super::snapshot::{SessionSnapshot, ToolHistoryEntry};
-use crate::hook::event::HookEvent;
+use crate::hook::event::{stop_output_from_raw, HookEvent};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
@@ -63,6 +63,11 @@ pub fn reduce_event(snapshot: &mut SessionSnapshot, event: &HookEvent) -> Vec<Si
             });
         }
         "UserPromptSubmit" => {
+            snapshot.last_user_prompt = event
+                .raw_json
+                .get("prompt")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
             snapshot.status = AgentStatus::Processing;
             effects.push(SideEffect::EmitStatusChanged {
                 status: snapshot.status,
@@ -153,6 +158,11 @@ pub fn reduce_event(snapshot: &mut SessionSnapshot, event: &HookEvent) -> Vec<Si
         }
         "PermissionRequest" => {
             snapshot.status = AgentStatus::WaitingApproval;
+            snapshot.tool_description = event
+                .tool_input
+                .as_ref()
+                .map(|v| v.to_string())
+                .or(snapshot.tool_description.clone());
             if let (Some(tool), Some(id)) = (&event.tool_name, &event.tool_use_id) {
                 effects.push(SideEffect::EmitPermissionRequest {
                     tool_name: tool.clone(),
@@ -170,12 +180,7 @@ pub fn reduce_event(snapshot: &mut SessionSnapshot, event: &HookEvent) -> Vec<Si
         }
         "Stop" => {
             snapshot.status = AgentStatus::Completed;
-            let out = event
-                .raw_json
-                .get("output_en")
-                .and_then(|x| x.as_str())
-                .or_else(|| event.raw_json.get("output").and_then(|x| x.as_str()))
-                .map(|s| s.to_string());
+            let out = stop_output_from_raw(&event.raw_json);
             if let Some(ref text) = out {
                 snapshot.last_assistant_message = Some(text.clone());
             }

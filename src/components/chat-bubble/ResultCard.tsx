@@ -6,14 +6,17 @@ export function ResultCard(): JSX.Element {
   const emotionText = useAppStore((s) => s.emotionText);
   const summaryTranslation = useAppStore((s) => s.summaryTranslation);
   const suggestionOptions = useAppStore((s) => s.suggestionOptions);
+  const resultZh = useAppStore((s) => s.resultZh);
   const setTask = useAppStore((s) => s.setTask);
   const setUiState = useAppStore((s) => s.setUiState);
   const setMode = useAppStore((s) => s.setMode);
+  const setAgentStatus = useAppStore((s) => s.setAgentStatus);
 
   const handleOptionClick = (opt: string) => {
     setTask(opt);
     setUiState("idle");
     setMode("idle");
+    setAgentStatus("idle");
   };
 
   const isError = mode === "error";
@@ -47,10 +50,18 @@ export function ResultCard(): JSX.Element {
         </div>
       )}
 
-      {/* Summary */}
+      {/* 摘要：与「译文/结果」分开展示，避免同一段长文出现两次。 */}
       {summaryTranslation && (
         <div className="px-1 text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">
-          {summaryTranslation}
+          <span className="font-semibold text-zinc-500 dark:text-zinc-500">摘要</span>
+          <p className="mt-1 whitespace-pre-wrap">{summaryTranslation}</p>
+        </div>
+      )}
+
+      {resultZh && (
+        <div className="rounded-lg border border-zinc-200/60 bg-white/50 px-3 py-2 text-xs leading-relaxed text-zinc-600 dark:border-zinc-700/60 dark:bg-zinc-900/40 dark:text-zinc-400">
+          <span className="font-semibold text-zinc-500 dark:text-zinc-500">译文 / 结果</span>
+          <p className="mt-1 whitespace-pre-wrap">{resultZh}</p>
         </div>
       )}
 

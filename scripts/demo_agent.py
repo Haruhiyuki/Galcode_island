@@ -1,12 +1,15 @@
 """
 Demo AI agent for galcode_island: prints JSONL progress then a structured result.
-Run with: python -u scripts/demo_agent.py --task "your task"
+
+Run: python -u scripts/demo_agent.py --task "你的任务"
+     Tauri 会设置环境变量 GALCODE_TASK（避免 Windows argv 上 UTF-8 被错误解码），优先于 --task。
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 
@@ -18,12 +21,20 @@ def emit(obj: dict) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--task", required=True, help="Task description (often English after translation)")
+    parser.add_argument(
+        "--task",
+        default="",
+        help="Task text (ignored when GALCODE_TASK is set, e.g. from Galcode Tauri)",
+    )
     args = parser.parse_args()
+    task = (os.environ.get("GALCODE_TASK") or "").strip() or (args.task or "").strip()
+    if not task:
+        emit({"type": "error", "message": "no task: set GALCODE_TASK or pass --task"})
+        sys.exit(2)
 
     emit({"stage": "init", "message": "收到任务，正在初始化 Demo Agent…", "percent": 5})
     time.sleep(0.15)
-    emit({"stage": "thinking", "message": f"理解需求：{args.task[:120]}…", "percent": 25})
+    emit({"stage": "thinking", "message": f"理解需求：{task[:120]}…", "percent": 25})
     time.sleep(0.2)
     emit({"stage": "working", "message": "生成示例输出（非真实代码执行）…", "percent": 55})
     time.sleep(0.25)
@@ -35,7 +46,7 @@ def main() -> None:
         "1) Restate the goal in one sentence.\n"
         "2) Propose a minimal file/layout structure.\n"
         "3) List 3 implementation steps with acceptance checks.\n"
-        f"\n(Task received): {args.task}"
+        f"\n(Task received): {task}"
     )
     emit({"type": "result", "output_en": output_en})
     emit({"stage": "done", "message": "Demo Agent 完成。", "percent": 100})

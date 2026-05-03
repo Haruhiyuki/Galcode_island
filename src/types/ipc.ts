@@ -15,7 +15,9 @@ export interface ToolUpdatePayload {
 export interface PermissionRequestPayload {
   sessionId: string;
   toolName: string;
-  toolArgs: string;
+  toolDescription?: string;
+  toolUseId: string;
+  rawInput?: Record<string, unknown>;
 }
 
 export interface LogPayload {

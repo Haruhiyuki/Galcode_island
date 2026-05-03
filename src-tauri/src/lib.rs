@@ -39,12 +39,29 @@ pub fn run() {
 
             let handle = app.handle().clone();
             let state = app.state::<Arc<AppState>>();
+            hook::server::spawn_hook_http_server(handle.clone(), Arc::clone(&state));
+
+            let install_handle = handle.clone();
+            std::thread::spawn(move || {
+                hook::installer::install_detected_hooks(&install_handle);
+            });
+
             session::cleanup::spawn_idle_cleanup_loop(handle, Arc::clone(&state));
 
             ipc::tray::setup_tray(app).map_err(|e| {
                 log::warn!("tray setup skipped: {}", e);
                 e
             }).ok();
+
+            // Windows WebView2 + transparent/hidden edge cases: force main window visible & focused.
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+                let _ = win.set_focus();
+                #[cfg(debug_assertions)]
+                {
+                    let _ = win.open_devtools();
+                }
+            }
 
             Ok(())
         })

@@ -35,6 +35,13 @@ interface AppState {
   emotionText: string;
   suggestionOptions: string[];
   lastStage: LastStage;
+  pendingPermission: {
+    sessionId: string;
+    toolName: string;
+    toolDescription?: string;
+    toolUseId: string;
+    rawInput?: Record<string, unknown>;
+  } | null;
 
   // Actions
   setCurrentView: (view: AppView) => void;
@@ -56,6 +63,11 @@ interface AppState {
   setEmotionText: (emotionText: string) => void;
   setSuggestionOptions: (options: string[]) => void;
   setLastStage: (lastStage: LastStage) => void;
+  setPendingPermission: (
+    p: AppState["pendingPermission"],
+  ) => void;
+  appendTodo: (item: TodoItem) => void;
+  clearTodos: () => void;
   addLogEntry: (entry: LogEntry) => void;
   clearLogs: () => void;
   resetSession: () => void;
@@ -100,6 +112,7 @@ export const useAppStore = create<AppState>((set) => ({
   emotionText: "",
   suggestionOptions: [],
   lastStage: "default",
+  pendingPermission: null,
 
   setCurrentView: (view) => set({ currentView: view }),
   setIsStarted: (isStarted) => set({ isStarted }),
@@ -128,6 +141,12 @@ export const useAppStore = create<AppState>((set) => ({
   setEmotionText: (emotionText) => set({ emotionText }),
   setSuggestionOptions: (suggestionOptions) => set({ suggestionOptions }),
   setLastStage: (lastStage) => set({ lastStage }),
+  setPendingPermission: (pendingPermission) => set({ pendingPermission }),
+  appendTodo: (item) =>
+    set((state) => ({
+      todos: [...state.todos.filter((t) => t.id !== item.id), item].slice(-40),
+    })),
+  clearTodos: () => set({ todos: [] }),
   addLogEntry: (entry) =>
     set((state) => ({
       logEntries: [...state.logEntries.slice(-79), entry],
@@ -146,5 +165,7 @@ export const useAppStore = create<AppState>((set) => ({
       uiState: "idle",
       agentStatus: "idle",
       sessionId: null,
+      todos: [],
+      pendingPermission: null,
     }),
 }));

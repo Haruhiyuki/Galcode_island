@@ -1,8 +1,10 @@
 import { motion } from "framer-motion";
 import { useAppStore } from "../../stores/useAppStore";
+import { TodoItem } from "./TodoItem";
 
 export function TodoProgress(): JSX.Element {
   const percent = useAppStore((s) => s.percent);
+  const todos = useAppStore((s) => s.todos);
 
   return (
     <div className="space-y-2">
@@ -18,6 +20,13 @@ export function TodoProgress(): JSX.Element {
           className="h-full rounded-full bg-gradient-to-r from-zinc-500 via-zinc-700 to-zinc-900 dark:from-zinc-400 dark:via-zinc-300 dark:to-zinc-100"
         />
       </div>
+      {todos.length > 0 ? (
+        <ul className="mt-2 max-h-28 space-y-1 overflow-y-auto text-xs text-zinc-600 dark:text-zinc-400">
+          {todos.slice(-12).map((t) => (
+            <TodoItem key={t.id} item={t} />
+          ))}
+        </ul>
+      ) : null}
     </div>
   );
 }

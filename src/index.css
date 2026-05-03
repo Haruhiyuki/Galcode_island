@@ -30,14 +30,24 @@ html,
 body,
 #root {
   width: 100%;
+  min-height: 100%;
   height: 100%;
   margin: 0;
   padding: 0;
   overflow: hidden;
 }
 
+/* Opaque base layer: transparent Tauri windows on Windows WebView2 often show a fully clear
+   client area until something paints; solid root/body avoids “invisible UI”. */
+#root {
+  display: flex;
+  flex-direction: column;
+  background-color: var(--app-bg);
+  isolation: isolate;
+}
+
 body {
-  background: transparent;
+  background: var(--app-bg);
   color: var(--app-text);
   font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   -webkit-font-smoothing: antialiased;

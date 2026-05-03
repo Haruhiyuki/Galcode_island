@@ -17,6 +17,8 @@ export function WelcomeView(): JSX.Element {
 
   const [isSelecting, setIsSelecting] = useState(false);
   const [isAgentMenuOpen, setIsAgentMenuOpen] = useState(false);
+  /** 0: welcome.gif（凉宫素材）→1: 矢量回退；≥2: emoji */
+  const [welcomeAsset, setWelcomeAsset] = useState(0);
 
   const selectedAgentLabel =
     agentOptions.find((o) => o.value === selectedAgent)?.label ?? "Claude Code";
@@ -49,13 +51,13 @@ export function WelcomeView(): JSX.Element {
       <div data-tauri-drag-region className="h-[30px] w-full shrink-0" />
 
       <motion.div
-        initial={{ opacity: 0, y: 14 }}
+        initial={false}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.55, ease: "easeOut" }}
         className="flex flex-1 flex-col items-center justify-center gap-8"
       >
         <motion.h1
-          initial={{ opacity: 0, y: 10 }}
+          initial={false}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 1.5, ease: "easeOut" }}
           className="text-center text-5xl font-semibold tracking-wide text-zinc-900 dark:text-zinc-100"
@@ -139,14 +141,31 @@ export function WelcomeView(): JSX.Element {
       </motion.div>
 
       <div className="flex h-52 w-full items-end justify-center overflow-hidden">
-        <motion.img
-          src="/pet/welcome/welcome.gif"
-          alt="欢迎动图"
-          initial={{ opacity: 0.55, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, ease: "easeOut" }}
-          className="h-56 object-contain"
-        />
+        {welcomeAsset < 2 ? (
+          <motion.img
+            src={
+              welcomeAsset === 0
+                ? "/pet/welcome/welcome.gif"
+                : "/pet/welcome/mascot.svg"
+            }
+            alt="凉宫春日 · 欢迎"
+            initial={false}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, ease: "easeOut" }}
+            className="h-56 w-auto max-w-[min(100%,280px)] object-contain"
+            onError={() => setWelcomeAsset((n) => n + 1)}
+          />
+        ) : (
+          <motion.div
+            initial={false}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, ease: "easeOut" }}
+            className="flex h-56 items-center justify-center text-7xl select-none"
+            aria-hidden
+          >
+            {"\u2728"}
+          </motion.div>
+        )}
       </div>
     </section>
   );

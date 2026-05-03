@@ -13,9 +13,10 @@ pub struct AgentConfig {
 pub fn preset_demo() -> AgentConfig {
     AgentConfig {
         name: "demo".into(),
+        /* 实际可执行名由 `spawn_demo_process` 在 Windows 上尝试 `py`/`python` 等；此处仅作日志/兼容。 */
         executable: std::env::var("PYTHON").unwrap_or_else(|_| {
             if cfg!(windows) {
-                "python".into()
+                "py".into()
             } else {
                 "python3".into()
             }

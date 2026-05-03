@@ -1,5 +1,5 @@
 ﻿import { AnimatePresence, motion } from "framer-motion";
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../stores/useAppStore";
 import type { AgentType } from "../types/agent";
@@ -8,30 +8,8 @@ import { InputBubble } from "./chat-bubble/InputBubble";
 import { ResultCard } from "./chat-bubble/ResultCard";
 import { RunningBubble } from "./chat-bubble/RunningBubble";
 import { StatusMonitor } from "./status-monitor/StatusMonitor";
-
-type PetVisualState = "thinking" | "complete" | "error" | "waiting";
-
-const PET_ASSET_BASE = "pet";
-
-function getVisualState(uiState: string, mode: string): PetVisualState {
-  if (uiState === "error" || mode === "error") return "error";
-  if (uiState === "done" || mode === "complete") return "complete";
-  if (uiState === "running" || mode === "thinking" || mode === "working") return "thinking";
-  if (uiState === "idle" && (mode === "idle" || !mode)) return "thinking";
-  return "waiting";
-}
-
-function pickRandomGif(state: PetVisualState): string {
-  const maxMap: Record<PetVisualState, number> = {
-    thinking: 2,
-    complete: 3,
-    waiting: 2,
-    error: 2,
-  };
-  const max = maxMap[state] || 1;
-  const n = Math.floor(Math.random() * max) + 1;
-  return `/${PET_ASSET_BASE}/${state}/${state}_${n}.gif`;
-}
+import { PetCharacter } from "./pet-character/PetCharacter";
+import { PermissionPrompt } from "./PermissionPrompt";
 
 function AgentSelector(): JSX.Element {
   const selectedAgent = useAppStore((s) => s.selectedAgent);
@@ -101,47 +79,40 @@ function StatusLight(): JSX.Element {
   );
 }
 
-function PetPreviewPanel(): JSX.Element {
-  const uiState = useAppStore((s) => s.uiState);
-  const mode = useAppStore((s) => s.mode);
-  
-  const [currentGif, setCurrentGif] = useState<string>(() => pickRandomGif(getVisualState(uiState, mode)));
-
-  useEffect(() => {
-    setCurrentGif(pickRandomGif(getVisualState(uiState, mode)));
-  }, [uiState, mode]);
-
-  return (
-    <div className="relative flex h-[260px] w-[320px] shrink-0 items-end justify-start overflow-hidden">
-      <AnimatePresence mode="popLayout">
-        <motion.img
-          key={currentGif}
-          src={currentGif}
-          alt={`宠物状态`}
-          initial={{ opacity: 0, x: -20 }}
-          animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: 20 }}
-          transition={{ duration: 0.4, ease: "easeOut" }}
-          className="h-full object-contain pointer-events-none drop-shadow-xl"
-        />
-      </AnimatePresence>
-    </div>
-  );
+function bubblePanel(
+  uiState: string,
+  mode: string | null | undefined,
+): "input" | "running" | "result" {
+  if (
+    uiState === "done" ||
+    uiState === "error" ||
+    uiState === "suggesting" ||
+    mode === "complete" ||
+    mode === "suggestion" ||
+    mode === "error"
+  ) {
+    return "result";
+  }
+  if (uiState === "running" || mode === "thinking" || mode === "working") {
+    return "running";
+  }
+  return "input";
 }
 
 export function MainView(): JSX.Element {
   const projectPath = useAppStore((s) => s.projectPath);
   const uiState = useAppStore((s) => s.uiState);
   const mode = useAppStore((s) => s.mode);
+  const mainBubble = bubblePanel(uiState, mode);
 
   return (
     <motion.section
-      initial={{ opacity: 0, y: 10 }}
+      initial={false}
       animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -10 }}
       transition={{ duration: 0.42, ease: "easeOut" }}
-      className="mx-auto flex h-full w-full max-w-7xl flex-col gap-4 p-4"
+      className="relative mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col gap-4 p-4"
     >
+      <PermissionPrompt />
       {/* Top Header */}
       <div className="flex items-start justify-between gap-4 border-b border-zinc-200 pb-3 dark:border-zinc-800">
         <div className="min-w-0">
@@ -173,22 +144,16 @@ export function MainView(): JSX.Element {
       <div className="flex-1" />
 
       {/* Pet & Bubble Interaction Area */}
-      <div className="flex w-full items-end gap-1 relative min-h-[220px]">
-        <PetPreviewPanel />
+      <div className="flex w-full items-end gap-1 relative min-h-[260px]">
+        <div className="flex h-[260px] w-[320px] shrink-0 items-end justify-center overflow-hidden">
+          <PetCharacter />
+        </div>
 
         <div className="flex-1 w-full translate-y-3 -ml-4">
           <AnimatePresence mode="wait">
-            {(uiState === "idle" && (mode === "idle" || !mode)) && (
-              <InputBubble key="input-bubble" />
-            )}
-
-            {(uiState === "running" || mode === "thinking" || mode === "working") && (
-              <RunningBubble key="running-bubble" />
-            )}
-
-            {(uiState === "done" || uiState === "error" || mode === "complete" || mode === "suggestion" || mode === "error") && (
-              <ResultCard key="result-card" />
-            )}
+            {mainBubble === "input" && <InputBubble key="input-bubble" />}
+            {mainBubble === "running" && <RunningBubble key="running-bubble" />}
+            {mainBubble === "result" && <ResultCard key="result-card" />}
           </AnimatePresence>
         </div>
       </div>
