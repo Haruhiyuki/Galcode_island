@@ -2,11 +2,36 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useState } from "react";
 import { useAppStore } from "../../stores/useAppStore";
+import { PetCharacter } from "../pet-character/PetCharacter";
 import type { AgentType } from "../../types/agent";
+
 const agentOptions = [
   { value: "claude-code", label: "Claude Code" },
   { value: "opencode", label: "OpenCode" },
 ] as const;
+
+const titleChars = "Galcode Island".split("");
+
+const titleVariants = {
+  hidden: {},
+  visible: {
+    transition: {
+      staggerChildren: 0.06,
+      delayChildren: 0.3,
+    },
+  },
+};
+
+const charVariants = {
+  hidden: { opacity: 0, y: 18, rotate: -8, filter: "blur(4px)" },
+  visible: {
+    opacity: 1,
+    y: 0,
+    rotate: 0,
+    filter: "blur(0px)",
+    transition: { type: "spring", damping: 12, stiffness: 200, mass: 0.6 },
+  },
+};
 
 export function WelcomeView(): JSX.Element {
   const projectPath = useAppStore((s) => s.projectPath);
@@ -45,7 +70,7 @@ export function WelcomeView(): JSX.Element {
   const isReady = Boolean(projectPath);
 
   return (
-    <section className="relative mx-auto flex h-full w-full max-w-6xl flex-col overflow-hidden rounded-[28px] border border-zinc-300/45 bg-gradient-to-br from-white/72 via-white/38 to-zinc-200/25 px-10 pb-0 shadow-[0_30px_90px_rgba(0,0,0,0.18)] backdrop-blur-2xl dark:border-zinc-700/55 dark:from-zinc-900/70 dark:via-zinc-900/45 dark:to-zinc-950/28">
+    <section className="relative mx-auto flex h-full w-full max-w-6xl flex-col overflow-hidden rounded-[28px] border border-white/60 bg-white/70 px-10 pb-0 shadow-[0_20px_60px_rgba(0,0,0,0.06)] backdrop-blur-2xl dark:border-white/10 dark:bg-slate-800/60 dark:shadow-none">
       <div data-tauri-drag-region className="h-[30px] w-full shrink-0" />
 
       <motion.div
@@ -54,13 +79,24 @@ export function WelcomeView(): JSX.Element {
         transition={{ duration: 0.55, ease: "easeOut" }}
         className="flex flex-1 flex-col items-center justify-center gap-8"
       >
+        {/* Apple-style handwriting reveal title */}
         <motion.h1
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 1.5, ease: "easeOut" }}
-          className="text-center text-5xl font-semibold tracking-wide text-zinc-900 dark:text-zinc-100"
+          variants={titleVariants}
+          initial="hidden"
+          animate="visible"
+          className="flex flex-wrap justify-center gap-x-[0.05em] text-center text-5xl font-bold italic tracking-tight text-zinc-800 dark:text-zinc-100 font-serif"
+          style={{ fontVariationSettings: "'wght' 700" }}
         >
-          Galcode Island
+          {titleChars.map((char, i) => (
+            <motion.span
+              key={`${char}-${i}`}
+              variants={charVariants}
+              className="inline-block bg-gradient-to-br from-amber-400 via-orange-500 to-amber-500 bg-clip-text text-transparent dark:from-amber-300 dark:via-orange-400 dark:to-amber-400"
+              style={{ minWidth: char === " " ? "0.3em" : undefined }}
+            >
+              {char === " " ? " " : char}
+            </motion.span>
+          ))}
         </motion.h1>
 
         <div className="flex items-center gap-3">
@@ -70,10 +106,10 @@ export function WelcomeView(): JSX.Element {
             type="button"
             onClick={handlePrimaryAction}
             disabled={isSelecting}
-            className={`min-w-36 border px-5 py-2.5 text-sm font-medium backdrop-blur-md transition-all duration-300 hover:-translate-y-0.5 hover:bg-white/20 hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-70 ${
+            className={`min-w-36 border px-5 py-2.5 text-sm font-medium backdrop-blur-md transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-70 ${
               isReady
-                ? "rounded-2xl border-emerald-500/55 bg-emerald-500/28 text-zinc-900 shadow-emerald-500/20 dark:border-emerald-300/50 dark:bg-emerald-500/35 dark:text-zinc-100"
-                : "rounded-xl border-white/20 bg-white/10 text-zinc-900 dark:text-zinc-100"
+                ? "rounded-2xl border-sky-400/50 bg-sky-400/25 text-zinc-900 shadow-sky-400/15 dark:border-sky-400/40 dark:bg-sky-500/30 dark:text-zinc-100"
+                : "rounded-xl border-white/30 bg-white/20 text-zinc-800 dark:border-white/15 dark:bg-white/10 dark:text-zinc-100"
             }`}
           >
             {isSelecting ? "选择中..." : actionLabel}
@@ -85,7 +121,7 @@ export function WelcomeView(): JSX.Element {
               whileHover={{ y: -2, scale: 1.01 }}
               whileTap={{ scale: 0.985 }}
               onClick={() => setIsAgentMenuOpen((prev) => !prev)}
-              className="min-w-40 rounded-2xl border border-white/20 bg-white/10 px-4 py-2.5 text-sm text-zinc-900 backdrop-blur-md transition-all duration-300 hover:-translate-y-0.5 hover:bg-white/20 hover:shadow-lg dark:text-zinc-100"
+              className="min-w-40 rounded-2xl border border-white/30 bg-white/20 px-4 py-2.5 text-sm text-zinc-800 backdrop-blur-md transition-all duration-300 hover:-translate-y-0.5 hover:bg-white/30 hover:shadow-lg dark:border-white/15 dark:bg-white/10 dark:text-zinc-100"
               aria-haspopup="listbox"
               aria-expanded={isAgentMenuOpen}
             >
@@ -99,15 +135,15 @@ export function WelcomeView(): JSX.Element {
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -6 }}
                   transition={{ duration: 0.2 }}
-                  className="absolute left-0 top-[calc(100%+8px)] z-20 w-full rounded-2xl border border-white/20 bg-white/10 p-1.5 backdrop-blur-md"
+                  className="absolute left-0 top-[calc(100%+8px)] z-20 w-full rounded-2xl border border-white/60 bg-white/70 p-1.5 shadow-lg backdrop-blur-xl dark:border-white/10 dark:bg-slate-800/60"
                   role="listbox"
                 >
                   {agentOptions.map((option) => (
                     <li key={option.value}>
                       <button
                         type="button"
-                        className={`w-full rounded-xl px-3 py-2 text-left text-sm text-zinc-900 transition-all duration-300 hover:-translate-y-0.5 hover:bg-white/20 hover:shadow-md dark:text-zinc-100 ${
-                          selectedAgent === option.value ? "bg-white/20 shadow-lg" : ""
+                        className={`w-full rounded-xl px-3 py-2 text-left text-sm text-zinc-800 transition-all duration-300 hover:-translate-y-0.5 hover:bg-white/40 hover:shadow-md dark:text-zinc-100 dark:hover:bg-white/10 ${
+                          selectedAgent === option.value ? "bg-white/40 shadow-md dark:bg-white/10" : ""
                         }`}
                         onClick={() => {
                           setSelectedAgent(option.value as AgentType);
@@ -130,7 +166,7 @@ export function WelcomeView(): JSX.Element {
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -6 }}
-              className="max-w-2xl rounded-xl border border-white/20 bg-white/10 px-3 py-2 text-center text-xs text-zinc-900 backdrop-blur-md dark:text-zinc-100"
+              className="max-w-2xl rounded-xl border border-white/60 bg-white/70 px-3 py-2 text-center text-xs text-zinc-700 backdrop-blur-md dark:border-white/10 dark:bg-slate-800/60 dark:text-zinc-300"
             >
               当前项目：{projectPath}
             </motion.p>
@@ -138,15 +174,9 @@ export function WelcomeView(): JSX.Element {
         </AnimatePresence>
       </motion.div>
 
-      <div className="flex h-52 w-full items-end justify-center overflow-hidden">
-        <motion.img
-          src="/pet/welcome/welcome.gif"
-          alt="欢迎动图"
-          initial={{ opacity: 0.55, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, ease: "easeOut" }}
-          className="h-56 object-contain"
-        />
+      {/* Interactive pet character at bottom */}
+      <div className="flex h-56 w-full items-end justify-center pb-2">
+        <PetCharacter />
       </div>
     </section>
   );

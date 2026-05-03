@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../../stores/useAppStore";
@@ -15,7 +15,7 @@ const GREETINGS = [
 export function InputBubble(): JSX.Element {
   const nickname = useSettingsStore((s) => s.nickname);
   const displayNickname = nickname.trim() ? nickname : "部员";
-  
+
   const projectPath = useAppStore((s) => s.projectPath);
   const agentStatus = useAppStore((s) => s.agentStatus);
   const setUiState = useAppStore((s) => s.setUiState);
@@ -28,7 +28,6 @@ export function InputBubble(): JSX.Element {
   const task = useAppStore((s) => s.task);
   const setTask = useAppStore((s) => s.setTask);
 
-  // Random greeting Selection
   useEffect(() => {
     if (agentStatus === "idle") {
       const g = GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
@@ -37,10 +36,9 @@ export function InputBubble(): JSX.Element {
     }
   }, [agentStatus, displayNickname]);
 
-  // Typewriter effect
   useEffect(() => {
     if (!greeting || agentStatus !== "idle") return;
-    
+
     let currentIndex = 0;
     const intervalId = setInterval(() => {
       setDisplayedGreeting(greeting.substring(0, currentIndex + 1));
@@ -48,7 +46,7 @@ export function InputBubble(): JSX.Element {
       if (currentIndex >= greeting.length) {
         clearInterval(intervalId);
       }
-    }, 40); // 40ms per character
+    }, 40);
 
     return () => clearInterval(intervalId);
   }, [greeting, agentStatus]);
@@ -81,46 +79,56 @@ export function InputBubble(): JSX.Element {
     <AnimatePresence>
       {agentStatus === "idle" && (
         <motion.div
-          initial={{ opacity: 0, scale: 0.9, x: -10, y: 10 }}
-          animate={{ opacity: 1, scale: 1, x: 0, y: 0 }}
-          exit={{ opacity: 0, scale: 0.95, y: 10 }}
+          key="input-bubble"
+          initial={{ opacity: 0, y: 10, scale: 0.95 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: -10, scale: 0.95 }}
           transition={{ type: "spring", damping: 22, stiffness: 280 }}
-          className="flex w-full flex-col overflow-hidden rounded-3xl rounded-bl-sm border border-zinc-200/60 bg-white/80 p-5 shadow-[0_8px_30px_rgb(0,0,0,0.06)] backdrop-blur-xl dark:border-zinc-700/50 dark:bg-zinc-800/80 dark:shadow-[0_8px_30px_rgb(0,0,0,0.2)]"
+          className="relative w-full overflow-hidden rounded-[22px] rounded-bl-[6px] p-[2px] shadow-lg shadow-amber-500/10 dark:shadow-none"
         >
-          <div className="mb-4 min-h-[3rem] text-[15px] font-medium leading-relaxed tracking-wide text-zinc-700 dark:text-zinc-200">
-            {displayedGreeting}
-            {displayedGreeting.length < greeting.length && (
-              <motion.span
-                animate={{ opacity: [1, 0] }}
-                transition={{ repeat: Infinity, duration: 0.8 }}
-                className="ml-1 inline-block h-[15px] w-2 bg-blue-500/70 align-middle"
-              />
-            )}
-          </div>
+          {/* Faint amber base layer */}
+          <div className="absolute inset-0 bg-amber-100/50 dark:bg-amber-400/10" />
 
-          <textarea
-            value={task}
-            onChange={(e) => setTask(e.target.value)}
-            placeholder="和团长对话……"
-            className="min-h-[100px] w-full resize-none rounded-xl border border-zinc-200/70 bg-zinc-50/50 p-3.5 text-sm text-zinc-800 outline-none transition-colors placeholder:text-zinc-400 focus:border-blue-500/50 focus:bg-white/80 dark:border-zinc-700/60 dark:bg-zinc-900/40 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-blue-500/40 dark:focus:bg-zinc-900/70"
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                handleLaunch();
-              }
-            }}
-          />
+          {/* Spinning conic gradient glow — longer visible arc in light mode */}
+          <div className="absolute top-[-50%] left-[-50%] h-[200%] w-[200%] animate-[spin_4s_linear_infinite] bg-[conic-gradient(from_0deg,transparent_60%,#fb923c_100%)] dark:bg-[conic-gradient(from_0deg,transparent_75%,#fb923c_100%)]" />
 
-          <div className="mt-4 flex justify-end">
-            <motion.button
-              whileHover={{ scale: 1.02, y: -1 }}
-              whileTap={{ scale: 0.98 }}
-              onClick={handleLaunch}
-              disabled={!task.trim()}
-              className="rounded-xl bg-blue-500 px-6 py-2.5 text-sm font-semibold tracking-wide text-white shadow-md shadow-blue-500/25 transition-all hover:bg-blue-600 hover:shadow-blue-500/40 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              启动
-            </motion.button>
+          {/* Inner glass content container */}
+          <div className="relative flex h-full w-full flex-col rounded-[20px] rounded-bl-[4px] border border-white/60 bg-white/70 p-5 backdrop-blur-2xl dark:border-white/10 dark:bg-slate-800/60">
+            <div className="mb-4 min-h-[3rem] text-[15px] font-medium leading-relaxed tracking-wide text-zinc-600 dark:text-zinc-300">
+              {displayedGreeting}
+              {displayedGreeting.length < greeting.length && (
+                <motion.span
+                  animate={{ opacity: [1, 0] }}
+                  transition={{ repeat: Infinity, duration: 0.8 }}
+                  className="ml-1 inline-block h-[15px] w-2 bg-sky-400/70 align-middle"
+                />
+              )}
+            </div>
+
+            <textarea
+              value={task}
+              onChange={(e) => setTask(e.target.value)}
+              placeholder="和团长对话……"
+              className="min-h-[100px] w-full resize-none rounded-xl border border-black/5 bg-white/50 p-3.5 text-sm text-zinc-800 outline-none transition-all placeholder:text-zinc-400 focus:border-sky-400/50 focus:bg-white/80 focus:ring-2 focus:ring-sky-400/15 dark:border-white/5 dark:bg-slate-900/40 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-sky-400/40 dark:focus:bg-slate-900/60 dark:focus:ring-sky-400/10"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleLaunch();
+                }
+              }}
+            />
+
+            <div className="mt-4 flex justify-end">
+              <motion.button
+                whileHover={{ scale: 1.02, y: -1 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={handleLaunch}
+                disabled={!task.trim()}
+                className="rounded-xl bg-sky-500 px-6 py-2.5 text-sm font-semibold tracking-wide text-white shadow-md shadow-sky-400/25 transition-all hover:bg-sky-600 hover:shadow-sky-400/40 active:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                启动
+              </motion.button>
+            </div>
           </div>
         </motion.div>
       )}

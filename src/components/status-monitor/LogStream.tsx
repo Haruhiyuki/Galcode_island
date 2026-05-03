@@ -1,10 +1,17 @@
+import { motion } from "framer-motion";
 import { useAppStore } from "../../stores/useAppStore";
 
 export function LogStream(): JSX.Element {
   const logEntries = useAppStore((s) => s.logEntries);
 
   return (
-    <div className="flex-1 min-h-[80px] max-h-[160px] overflow-y-auto rounded-lg bg-zinc-100/70 p-2 font-mono text-[11px] leading-relaxed dark:bg-zinc-800/70">
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -8 }}
+      transition={{ duration: 0.3 }}
+      className="flex-1 min-h-[80px] max-h-[160px] overflow-y-auto rounded-lg bg-zinc-100/50 p-2 font-mono text-[11px] leading-relaxed dark:bg-zinc-800/50"
+    >
       {logEntries.length === 0 ? (
         <div className="text-zinc-400 dark:text-zinc-500">等待 Agent 事件…</div>
       ) : (
@@ -13,7 +20,7 @@ export function LogStream(): JSX.Element {
             key={`${i}-${entry.timestamp}`}
             className={`whitespace-pre-wrap break-all ${
               entry.level === "error"
-                ? "text-rose-600 dark:text-rose-400"
+                ? "text-rose-500 dark:text-rose-400"
                 : "text-zinc-600 dark:text-zinc-300"
             }`}
           >
@@ -21,6 +28,6 @@ export function LogStream(): JSX.Element {
           </div>
         ))
       )}
-    </div>
+    </motion.div>
   );
 }

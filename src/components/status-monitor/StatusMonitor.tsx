@@ -1,15 +1,32 @@
+import { motion, AnimatePresence } from "framer-motion";
+import { useAppStore } from "../../stores/useAppStore";
 import { AgentStatusBadge } from "./AgentStatusBadge";
 import { TodoProgress } from "./TodoProgress";
 import { LogStream } from "./LogStream";
 
 export function StatusMonitor(): JSX.Element {
+  const uiState = useAppStore((s) => s.uiState);
+  const mode = useAppStore((s) => s.mode);
+  const isVisible = uiState === "running" || mode === "working" || mode === "thinking";
+
   return (
-    <section className="flex flex-col gap-3 rounded-xl border border-zinc-300/70 bg-white/65 p-4 backdrop-blur dark:border-zinc-700/70 dark:bg-zinc-900/55">
-      <div className="flex items-center justify-between">
-        <AgentStatusBadge />
-      </div>
-      <TodoProgress />
-      <LogStream />
-    </section>
+    <AnimatePresence>
+      {isVisible && (
+        <motion.section
+          key="status-monitor"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -10 }}
+          transition={{ duration: 0.3 }}
+          className="flex flex-col gap-3 rounded-xl border border-white/60 bg-white/70 p-4 shadow-[0_8px_30px_rgba(0,0,0,0.04)] backdrop-blur-2xl dark:border-white/10 dark:bg-slate-800/60 dark:shadow-none"
+        >
+          <div className="flex items-center justify-between">
+            <AgentStatusBadge />
+          </div>
+          <TodoProgress />
+          <LogStream />
+        </motion.section>
+      )}
+    </AnimatePresence>
   );
 }
