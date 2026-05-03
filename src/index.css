@@ -1,0 +1,147 @@
+@import "tailwindcss";
+@config "../tailwind.config.js";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-app-bg: var(--app-bg);
+  --color-app-surface: var(--app-surface);
+  --color-app-text: var(--app-text);
+  --color-app-muted: var(--app-muted);
+}
+
+:root {
+  color-scheme: light;
+  --app-bg: #f1f5f9;
+  --app-surface: rgb(255 255 255 / 0.7);
+  --app-text: #1a1a1a;
+  --app-muted: #5c5c5c;
+}
+
+.dark {
+  color-scheme: dark;
+  --app-bg: #0B1120;
+  --app-surface: rgb(30 41 59 / 0.6);
+  --app-text: #f0f0f0;
+  --app-muted: #94a3b8;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+body {
+  background: transparent;
+  color: var(--app-text);
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ----- Glass shared components ----- */
+.progress-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.progress-bar {
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 0.06);
+  overflow: hidden;
+}
+
+.dark .progress-bar {
+  background: rgb(255 255 255 / 0.08);
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #38bdf8, #0ea5e9);
+  transition: width 0.25s ease;
+}
+
+.progress-label {
+  font-size: 11px;
+  color: rgb(0 0 0 / 0.45);
+  width: 38px;
+  text-align: right;
+}
+
+.dark .progress-label {
+  color: rgb(255 255 255 / 0.55);
+}
+
+.task-input {
+  width: 100%;
+  min-height: 56px;
+  resize: vertical;
+  border-radius: 10px;
+  border: 1px solid rgb(0 0 0 / 0.08);
+  padding: 8px 10px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--app-text);
+  background: rgb(255 255 255 / 0.5);
+  outline: none;
+}
+
+.dark .task-input {
+  border-color: rgb(255 255 255 / 0.1);
+  background: rgb(0 0 0 / 0.2);
+}
+
+.task-input:focus {
+  border-color: rgba(14, 165, 233, 0.5);
+  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.12);
+}
+
+.log-panel {
+  max-height: 100px;
+  overflow-y: auto;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgb(0 0 0 / 0.04);
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--app-muted);
+}
+
+.dark .log-panel {
+  background: rgb(0 0 0 / 0.25);
+  color: rgba(200, 220, 255, 0.88);
+}
+
+.log-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin-bottom: 3px;
+}
+
+.live2d-panel {
+  position: relative;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.04);
+  overflow: hidden;
+  min-height: 100px;
+}
+
+.dark .live2d-panel {
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.live2d-panel canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
