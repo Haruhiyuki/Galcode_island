@@ -45,7 +45,7 @@ export function GlobalTopBar(): JSX.Element {
           <button
             type="button"
             onClick={handleStop}
-            className="flex h-7 items-center rounded-lg bg-rose-500/20 px-2 text-xs font-medium text-rose-600 transition-all duration-200 hover:-translate-y-0.5 hover:bg-rose-500/35 dark:text-rose-100"
+            className="flex h-7 items-center rounded-lg bg-rose-400/15 px-2 text-xs font-medium text-rose-500 transition-all duration-200 hover:-translate-y-0.5 hover:bg-rose-400/25 dark:text-rose-300"
           >
             停止
           </button>
@@ -53,7 +53,7 @@ export function GlobalTopBar(): JSX.Element {
         <button
           type="button"
           onClick={openSettingsModal}
-          className="flex h-8 w-8 items-center justify-center rounded-lg bg-black/15 text-zinc-700 transition-all duration-200 hover:-translate-y-0.5 hover:bg-black/25 dark:bg-white/15 dark:text-zinc-100 dark:hover:bg-white/25"
+          className="flex h-8 w-8 items-center justify-center rounded-lg bg-black/10 text-zinc-600 transition-all duration-200 hover:-translate-y-0.5 hover:bg-black/20 dark:bg-white/10 dark:text-zinc-300 dark:hover:bg-white/20"
           aria-label="设置"
           title="设置"
         >
@@ -65,7 +65,7 @@ export function GlobalTopBar(): JSX.Element {
         <button
           type="button"
           onClick={toggleTheme}
-          className="flex h-8 w-8 items-center justify-center rounded-lg bg-black/15 text-zinc-700 transition-all duration-200 hover:-translate-y-0.5 hover:bg-black/25 dark:bg-white/15 dark:text-zinc-100 dark:hover:bg-white/25"
+          className="flex h-8 w-8 items-center justify-center rounded-lg bg-black/10 text-zinc-600 transition-all duration-200 hover:-translate-y-0.5 hover:bg-black/20 dark:bg-white/10 dark:text-zinc-300 dark:hover:bg-white/20"
           aria-label="切换黑白模式"
           title="切换黑白模式 (Ctrl/Cmd + Shift + L)"
         >
@@ -83,7 +83,7 @@ export function GlobalTopBar(): JSX.Element {
         <button
           type="button"
           onClick={async () => { try { await appWindow.minimize(); } catch (error) { console.error("Failed to minimize", error); } }}
-          className="flex h-8 w-8 items-center justify-center rounded-lg bg-black/15 text-sm text-zinc-700 transition-all duration-200 hover:-translate-y-0.5 hover:bg-black/25 dark:text-zinc-100 dark:hover:bg-white/20"
+          className="flex h-8 w-8 items-center justify-center rounded-lg bg-black/10 text-sm text-zinc-600 transition-all duration-200 hover:-translate-y-0.5 hover:bg-black/20 dark:bg-white/10 dark:text-zinc-300 dark:hover:bg-white/20"
           aria-label="最小化窗口"
         >
           -
@@ -91,7 +91,7 @@ export function GlobalTopBar(): JSX.Element {
         <button
           type="button"
           onClick={async () => { try { await appWindow.toggleMaximize(); } catch (error) { console.error("Failed to toggle maximize", error); } }}
-          className="flex h-8 w-8 items-center justify-center rounded-lg bg-black/15 text-xs text-zinc-700 transition-all duration-200 hover:-translate-y-0.5 hover:bg-black/25 dark:text-zinc-100 dark:hover:bg-white/20"
+          className="flex h-8 w-8 items-center justify-center rounded-lg bg-black/10 text-xs text-zinc-600 transition-all duration-200 hover:-translate-y-0.5 hover:bg-black/20 dark:bg-white/10 dark:text-zinc-300 dark:hover:bg-white/20"
           aria-label="最大化窗口"
         >
           □
@@ -99,7 +99,7 @@ export function GlobalTopBar(): JSX.Element {
         <button
           type="button"
           onClick={async () => { try { await appWindow.close(); } catch (error) { console.error("Failed to close", error); } }}
-          className="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-500/20 text-sm text-rose-600 transition-all duration-200 hover:-translate-y-0.5 hover:bg-rose-500/35 dark:text-rose-100"
+          className="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-400/15 text-sm text-rose-500 transition-all duration-200 hover:-translate-y-0.5 hover:bg-rose-400/25 dark:text-rose-300"
           aria-label="关闭窗口"
         >
           ×

@@ -20,15 +20,23 @@ pub fn select_project_folder(app: AppHandle) -> Result<Option<String>, String> {
     }))
 }
 
-/// 黑客松计划兼容：中文任务 → 可选翻译 → 启动 Demo Agent（工作目录默认 `.`，可传 `cwd`）。
+/// 黑客松计划兼容：中文任务 → 可选翻译 → 启动 Agent（工作目录默认 `.`，可传 `cwd`）。
 #[tauri::command]
 pub fn start_agent(
     app: AppHandle,
     state: State<Arc<AppState>>,
     user_input_zh: String,
     cwd: Option<String>,
+    agent: Option<String>,
 ) -> Result<LaunchResult, String> {
     let cwd = cwd.unwrap_or_else(|| ".".to_string());
+    let agent_type = agent.clone().unwrap_or_else(|| "opencode".to_string());
+
+    eprintln!(
+        "[galcode] start_agent called: agent={}, cwd={}, task={}",
+        agent_type, cwd, user_input_zh
+    );
+
     let prev = {
         let mgr = state.manager.lock().map_err(|e| e.to_string())?;
         mgr.active_demo_session.clone()
@@ -36,7 +44,20 @@ pub fn start_agent(
     if let Some(sid) = prev {
         let _ = manager::stop_session(app.clone(), Arc::clone(state.inner()), sid);
     }
-    manager::launch_demo_agent(app, Arc::clone(state.inner()), cwd, user_input_zh)
+
+    eprintln!("[galcode] routing to agent type: {}", agent_type);
+    match agent_type.as_str() {
+        "opencode" => {
+            eprintln!("[galcode] -> launch_opencode_agent");
+            manager::launch_opencode_agent(app, Arc::clone(state.inner()), cwd, user_input_zh)
+        }
+        "demo" => {
+            eprintln!("[galcode] -> launch_demo_agent");
+            manager::launch_demo_agent(app, Arc::clone(state.inner()), cwd, user_input_zh)
+        }
+        "claude-code" => Err("Claude Code agent 尚未接入，敬请期待".into()),
+        _ => Err(format!("暂不支持的 agent 类型: {}", agent_type)),
+    }
 }
 
 #[tauri::command]
@@ -51,6 +72,10 @@ pub fn launch_agent(
         "demo" => {
             let task = task_zh.ok_or_else(|| "demo agent 需要参数 task_zh".to_string())?;
             manager::launch_demo_agent(app, Arc::clone(state.inner()), cwd, task)
+        }
+        "opencode" => {
+            let task = task_zh.ok_or_else(|| "opencode agent 需要参数 task_zh".to_string())?;
+            manager::launch_opencode_agent(app, Arc::clone(state.inner()), cwd, task)
         }
         _ => Err(format!("暂不支持的 agent 类型: {}", agent)),
     }

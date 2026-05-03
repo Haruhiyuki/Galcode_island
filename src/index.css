@@ -12,18 +12,18 @@
 
 :root {
   color-scheme: light;
-  --app-bg: #f5efdf;
-  --app-surface: rgb(255 255 255 / 0.72);
-  --app-text: #141414;
-  --app-muted: #525252;
+  --app-bg: #f1f5f9;
+  --app-surface: rgb(255 255 255 / 0.7);
+  --app-text: #1a1a1a;
+  --app-muted: #5c5c5c;
 }
 
 .dark {
   color-scheme: dark;
-  --app-bg: #2f3338;
-  --app-surface: rgb(24 24 27 / 0.68);
-  --app-text: #fafafa;
-  --app-muted: #a1a1aa;
+  --app-bg: #0B1120;
+  --app-surface: rgb(30 41 59 / 0.6);
+  --app-text: #f0f0f0;
+  --app-muted: #94a3b8;
 }
 
 html,
@@ -44,7 +44,7 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* ----- Shared components ----- */
+/* ----- Glass shared components ----- */
 .progress-wrap {
   display: flex;
   align-items: center;
@@ -55,30 +55,30 @@ body {
   flex: 1;
   height: 8px;
   border-radius: 999px;
-  background: rgb(0 0 0 / 0.08);
+  background: rgb(0 0 0 / 0.06);
   overflow: hidden;
 }
 
 .dark .progress-bar {
-  background: rgb(255 255 255 / 0.12);
+  background: rgb(255 255 255 / 0.08);
 }
 
 .progress-fill {
   height: 100%;
   border-radius: 999px;
-  background: linear-gradient(90deg, #6ea8ff, #c89bff);
+  background: linear-gradient(90deg, #38bdf8, #0ea5e9);
   transition: width 0.25s ease;
 }
 
 .progress-label {
   font-size: 11px;
-  color: rgb(0 0 0 / 0.5);
+  color: rgb(0 0 0 / 0.45);
   width: 38px;
   text-align: right;
 }
 
 .dark .progress-label {
-  color: rgb(255 255 255 / 0.65);
+  color: rgb(255 255 255 / 0.55);
 }
 
 .task-input {
@@ -86,7 +86,7 @@ body {
   min-height: 56px;
   resize: vertical;
   border-radius: 10px;
-  border: 1px solid rgb(0 0 0 / 0.12);
+  border: 1px solid rgb(0 0 0 / 0.08);
   padding: 8px 10px;
   font-family: inherit;
   font-size: 12px;
@@ -96,12 +96,13 @@ body {
 }
 
 .dark .task-input {
-  border-color: rgb(255 255 255 / 0.14);
+  border-color: rgb(255 255 255 / 0.1);
   background: rgb(0 0 0 / 0.2);
 }
 
 .task-input:focus {
-  border-color: rgba(110, 168, 255, 0.65);
+  border-color: rgba(14, 165, 233, 0.5);
+  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.12);
 }
 
 .log-panel {
@@ -109,7 +110,7 @@ body {
   overflow-y: auto;
   padding: 6px 8px;
   border-radius: 8px;
-  background: rgb(0 0 0 / 0.05);
+  background: rgb(0 0 0 / 0.04);
   font-family: ui-monospace, monospace;
   font-size: 10px;
   line-height: 1.35;
@@ -130,13 +131,13 @@ body {
 .live2d-panel {
   position: relative;
   border-radius: 12px;
-  background: rgba(0, 0, 0, 0.08);
+  background: rgba(0, 0, 0, 0.04);
   overflow: hidden;
   min-height: 100px;
 }
 
 .dark .live2d-panel {
-  background: rgba(0, 0, 0, 0.22);
+  background: rgba(0, 0, 0, 0.18);
 }
 
 .live2d-panel canvas {

@@ -24,3 +24,26 @@ pub fn preset_demo() -> AgentConfig {
         env_vars: HashMap::new(),
     }
 }
+
+pub fn preset_opencode() -> AgentConfig {
+    AgentConfig {
+        name: "opencode".into(),
+        executable: "opencode".into(),
+        args: vec![
+            "run".into(),
+            "--format".into(),
+            "json".into(),
+        ],
+        env_vars: HashMap::new(),
+    }
+}
+
+#[allow(dead_code)]
+pub fn preset_claude_code() -> AgentConfig {
+    AgentConfig {
+        name: "claude-code".into(),
+        executable: "claude".into(),
+        args: vec![],
+        env_vars: HashMap::new(),
+    }
+}

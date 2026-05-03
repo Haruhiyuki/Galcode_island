@@ -7,19 +7,19 @@ export function AgentStatusBadge(): JSX.Element {
 
   const color = useMemo(() => {
     switch (uiState) {
-      case "running": return "bg-emerald-400 shadow-emerald-400/70";
-      case "done": return "bg-sky-400 shadow-sky-400/70";
-      case "error": return "bg-rose-500 shadow-rose-500/75";
-      case "suggesting": return "bg-violet-400 shadow-violet-400/70";
-      default: return "bg-zinc-400 shadow-zinc-400/60";
+      case "running": return "bg-emerald-400 shadow-emerald-400/40";
+      case "done": return "bg-sky-400 shadow-sky-400/40";
+      case "error": return "bg-rose-400 shadow-rose-400/40";
+      case "suggesting": return "bg-violet-400 shadow-violet-400/40";
+      default: return "bg-zinc-400 shadow-zinc-400/40";
     }
   }, [uiState]);
 
   return (
     <div className="flex items-center gap-2">
-      <div className="flex items-center gap-2 rounded-full border border-zinc-300/70 bg-white/65 px-3 py-1 dark:border-zinc-700/70 dark:bg-zinc-900/55">
-        <span className={`h-2.5 w-2.5 rounded-full shadow-[0_0_12px] ${color}`} />
-        <span className="text-xs uppercase tracking-[0.18em] text-zinc-600 dark:text-zinc-300">
+      <div className="flex items-center gap-2 rounded-full border border-white/60 bg-white/70 px-3 py-1 backdrop-blur-md dark:border-white/10 dark:bg-slate-800/60">
+        <span className={`h-2.5 w-2.5 rounded-full shadow-[0_0_8px] ${color}`} />
+        <span className="text-xs uppercase tracking-[0.18em] text-zinc-500 dark:text-zinc-400">
           {uiState}
         </span>
       </div>
