@@ -30,9 +30,10 @@ interface AppState {
   bubble: string;
   sessionId: string | null;
   resultZh: string;
-  summaryText: string;
+  mode: string;
+  summaryTranslation: string;
   emotionText: string;
-  suggestion: string;
+  suggestionOptions: string[];
   lastStage: LastStage;
 
   // Actions
@@ -50,9 +51,10 @@ interface AppState {
   setBubble: (bubble: string) => void;
   setSessionId: (sessionId: string | null) => void;
   setResultZh: (resultZh: string) => void;
-  setSummaryText: (summaryText: string) => void;
+  setMode: (mode: string) => void;
+  setSummaryTranslation: (summaryTranslation: string) => void;
   setEmotionText: (emotionText: string) => void;
-  setSuggestion: (suggestion: string) => void;
+  setSuggestionOptions: (options: string[]) => void;
   setLastStage: (lastStage: LastStage) => void;
   addLogEntry: (entry: LogEntry) => void;
   clearLogs: () => void;
@@ -87,15 +89,16 @@ export const useAppStore = create<AppState>((set) => ({
   logEntries: [],
   theme: initialTheme,
 
-  task: "用 Python 写一个简单的下载网页的小脚本说明。",
+  task: "",
   uiState: "idle",
   percent: 0,
   bubble: "嗨，我是春日桌宠！输入中文任务，我会调用 Demo Agent。",
   sessionId: null,
   resultZh: "",
-  summaryText: "",
+  mode: "idle",
+  summaryTranslation: "",
   emotionText: "",
-  suggestion: "",
+  suggestionOptions: [],
   lastStage: "default",
 
   setCurrentView: (view) => set({ currentView: view }),
@@ -120,9 +123,10 @@ export const useAppStore = create<AppState>((set) => ({
   setBubble: (bubble) => set({ bubble }),
   setSessionId: (sessionId) => set({ sessionId }),
   setResultZh: (resultZh) => set({ resultZh }),
-  setSummaryText: (summaryText) => set({ summaryText }),
+  setMode: (mode) => set({ mode }),
+  setSummaryTranslation: (summaryTranslation) => set({ summaryTranslation }),
   setEmotionText: (emotionText) => set({ emotionText }),
-  setSuggestion: (suggestion) => set({ suggestion }),
+  setSuggestionOptions: (suggestionOptions) => set({ suggestionOptions }),
   setLastStage: (lastStage) => set({ lastStage }),
   addLogEntry: (entry) =>
     set((state) => ({
@@ -134,9 +138,10 @@ export const useAppStore = create<AppState>((set) => ({
       percent: 0,
       bubble: "",
       resultZh: "",
-      summaryText: "",
+      mode: "idle",
+      summaryTranslation: "",
       emotionText: "",
-      suggestion: "",
+      suggestionOptions: [],
       lastStage: "default",
       uiState: "idle",
       agentStatus: "idle",

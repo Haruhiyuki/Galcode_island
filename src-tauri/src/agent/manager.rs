@@ -3,7 +3,7 @@ use super::launcher::{resolve_demo_script, spawn_demo_process};
 use crate::hook::event::HookEvent;
 use crate::ipc::events::{self, SessionCompletePayload};
 use crate::llm::{
-    generate_summary_emotion, load_llm_config, suggest_next_steps, translate_en_to_zh,
+    generate_agent_summary, load_llm_config, translate_en_to_zh,
     translate_zh_to_en, LlmConfig,
 };
 use crate::session::snapshot::SessionSnapshot;
@@ -300,25 +300,26 @@ fn run_stdout_loop(
         None => result_en.clone(),
     };
 
-    let (summary, emotion, suggestion_zh) = match &llm {
-        Some(cfg) => match generate_summary_emotion(cfg, &user_zh, &result_zh) {
+    let (mode, emotion, summary, suggestion_options) = match &llm {
+        Some(cfg) => match generate_agent_summary(cfg, &user_zh, &result_zh) {
             Ok(s) => (
-                Some(s.summary.clone()),
-                Some(s.emotion.clone()),
-                suggest_next_steps(cfg, &user_zh, &result_zh).ok(),
+                Some(s.mode.clone()),
+                Some(s.emotion_speech.clone()),
+                Some(s.summary_translation.clone()),
+                Some(s.next_options.clone()),
             ),
             Err(e) => (
-                Some(result_zh.chars().take(400).collect::<String>()),
+                Some("error".into()),
                 Some(format!("总结生成失败: {}", e)),
-                suggest_next_steps(cfg, &user_zh, &result_zh).ok(),
+                Some(result_zh.chars().take(400).collect::<String>()),
+                Some(vec![]),
             ),
         },
         None => (
-            Some(result_zh.chars().take(400).collect::<String>()),
+            Some("complete".into()),
             Some("任务完成！（未配置 LLM_API_KEY，使用本地占位文案）".into()),
-            Some(
-                "（未配置 LLM_API_KEY）跳过智能建议。配置环境变量后可获得后续改进提示。".into(),
-            ),
+            Some(result_zh.chars().take(400).collect::<String>()),
+            Some(vec!["（未配置 API Key）".into()]),
         ),
     };
 
@@ -331,11 +332,12 @@ fn run_stdout_loop(
         "agent://session-complete",
         SessionCompletePayload {
             session_id: session_id.clone(),
-            summary: summary.clone(),
+            mode: mode.clone(),
             emotion: emotion.clone(),
+            summary_translation: summary.clone(),
             result_raw: Some(result_en.clone()),
             result_zh: Some(result_zh.clone()),
-            suggestion_zh: suggestion_zh.clone(),
+            suggestion_options: suggestion_options.clone(),
         },
     );
 
@@ -348,10 +350,12 @@ fn run_stdout_loop(
             "sessionId": session_id,
         }),
     );
-    if let Some(sz) = suggestion_zh {
+    if let Some(opts) = suggestion_options {
+        // You could emit suggestion-ready with the first option, or change the frontend to expect an array.
+        // For backwards compatibility we can just join them or pass the array.
         let _ = app.emit(
             "suggestion-ready",
-            serde_json::json!({ "textZh": sz, "sessionId": session_id }),
+            serde_json::json!({ "options": opts, "sessionId": session_id }),
         );
     }
 

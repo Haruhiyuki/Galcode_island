@@ -53,11 +53,12 @@ pub struct LogPayload {
 #[serde(rename_all = "camelCase")]
 pub struct SessionCompletePayload {
     pub session_id: String,
-    pub summary: Option<String>,
+    pub mode: Option<String>,
     pub emotion: Option<String>,
+    pub summary_translation: Option<String>,
     pub result_raw: Option<String>,
     pub result_zh: Option<String>,
-    pub suggestion_zh: Option<String>,
+    pub suggestion_options: Option<Vec<String>>,
 }
 
 #[derive(Clone, Serialize)]

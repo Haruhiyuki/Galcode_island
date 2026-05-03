@@ -19,12 +19,14 @@ export function InputBubble(): JSX.Element {
   const projectPath = useAppStore((s) => s.projectPath);
   const agentStatus = useAppStore((s) => s.agentStatus);
   const setUiState = useAppStore((s) => s.setUiState);
+  const setMode = useAppStore((s) => s.setMode);
   const setAgentStatus = useAppStore((s) => s.setAgentStatus);
   const addLogEntry = useAppStore((s) => s.addLogEntry);
 
   const [greeting, setGreeting] = useState("");
   const [displayedGreeting, setDisplayedGreeting] = useState("");
-  const [inputValue, setInputValue] = useState("");
+  const task = useAppStore((s) => s.task);
+  const setTask = useAppStore((s) => s.setTask);
 
   // Random greeting Selection
   useEffect(() => {
@@ -52,13 +54,16 @@ export function InputBubble(): JSX.Element {
   }, [greeting, agentStatus]);
 
   const handleLaunch = async () => {
-    if (!inputValue.trim()) return;
+    if (!task.trim()) return;
+    const selectedAgent = useAppStore.getState().selectedAgent;
     try {
       setUiState("running");
+      setMode("working");
       setAgentStatus("running");
       await invoke("start_agent", {
-        userInputZh: inputValue,
-        cwd: projectPath,
+        userInputZh: task,
+        cwd: projectPath || ".",
+        agent: selectedAgent,
       });
     } catch (err) {
       addLogEntry({
@@ -66,8 +71,9 @@ export function InputBubble(): JSX.Element {
         level: "error",
         message: `launch err: ${String(err)}`,
       });
-      setUiState("idle");
-      setAgentStatus("idle");
+      setUiState("error");
+      setMode("error");
+      setAgentStatus("error");
     }
   };
 
@@ -79,7 +85,7 @@ export function InputBubble(): JSX.Element {
           animate={{ opacity: 1, scale: 1, x: 0, y: 0 }}
           exit={{ opacity: 0, scale: 0.95, y: 10 }}
           transition={{ type: "spring", damping: 22, stiffness: 280 }}
-          className="flex w-full max-w-lg flex-col overflow-hidden rounded-3xl rounded-bl-sm border border-zinc-200/60 bg-white/80 p-5 shadow-[0_8px_30px_rgb(0,0,0,0.06)] backdrop-blur-xl dark:border-zinc-700/50 dark:bg-zinc-800/80 dark:shadow-[0_8px_30px_rgb(0,0,0,0.2)]"
+          className="flex w-full flex-col overflow-hidden rounded-3xl rounded-bl-sm border border-zinc-200/60 bg-white/80 p-5 shadow-[0_8px_30px_rgb(0,0,0,0.06)] backdrop-blur-xl dark:border-zinc-700/50 dark:bg-zinc-800/80 dark:shadow-[0_8px_30px_rgb(0,0,0,0.2)]"
         >
           <div className="mb-4 min-h-[3rem] text-[15px] font-medium leading-relaxed tracking-wide text-zinc-700 dark:text-zinc-200">
             {displayedGreeting}
@@ -93,9 +99,9 @@ export function InputBubble(): JSX.Element {
           </div>
 
           <textarea
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            placeholder="用中文描述你想让我做的任务..."
+            value={task}
+            onChange={(e) => setTask(e.target.value)}
+            placeholder="和团长对话……"
             className="min-h-[100px] w-full resize-none rounded-xl border border-zinc-200/70 bg-zinc-50/50 p-3.5 text-sm text-zinc-800 outline-none transition-colors placeholder:text-zinc-400 focus:border-blue-500/50 focus:bg-white/80 dark:border-zinc-700/60 dark:bg-zinc-900/40 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-blue-500/40 dark:focus:bg-zinc-900/70"
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
@@ -110,7 +116,7 @@ export function InputBubble(): JSX.Element {
               whileHover={{ scale: 1.02, y: -1 }}
               whileTap={{ scale: 0.98 }}
               onClick={handleLaunch}
-              disabled={!inputValue.trim()}
+              disabled={!task.trim()}
               className="rounded-xl bg-blue-500 px-6 py-2.5 text-sm font-semibold tracking-wide text-white shadow-md shadow-blue-500/25 transition-all hover:bg-blue-600 hover:shadow-blue-500/40 disabled:cursor-not-allowed disabled:opacity-50"
             >
               启动

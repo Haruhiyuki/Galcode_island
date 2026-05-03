@@ -26,10 +26,12 @@ export interface LogPayload {
 
 export interface SessionCompletePayload {
   sessionId: string;
-  summary: string;
-  emotion: string;
-  resultZh: string;
-  suggestionZh: string;
+  mode?: string;
+  emotion?: string;
+  summaryTranslation?: string;
+  resultRaw?: string;
+  resultZh?: string;
+  suggestionOptions?: string[];
 }
 
 export interface ErrorPayload {
@@ -52,5 +54,5 @@ export interface AgentDonePayload {
 
 export interface SuggestionReadyPayload {
   sessionId?: string;
-  textZh?: string;
+  options?: string[];
 }

@@ -81,15 +81,16 @@ export function useAgentIPC(): void {
             store.setUiState("done");
             store.setPercent(100);
             store.setLastStage("done");
+            store.setMode(p.mode ?? "complete");
             store.setResultZh(p.resultZh ?? "");
-            store.setSummaryText(p.summary ?? "");
+            store.setSummaryTranslation(p.summaryTranslation ?? "");
             store.setEmotionText(p.emotion ?? "");
-            store.setSuggestion(p.suggestionZh ?? "");
+            store.setSuggestionOptions(p.suggestionOptions ?? []);
             store.setBubble(p.emotion || "任务完成！");
             store.addLogEntry({
               timestamp: Date.now(),
               level: "info",
-              message: `[session-complete] ${(p.summary ?? "").slice(0, 320)}`,
+              message: `[session-complete] ${(p.summaryTranslation ?? "").slice(0, 320)}`,
             });
           });
         }),
@@ -150,10 +151,10 @@ export function useAgentIPC(): void {
           const p = e.payload;
           const current = sessionRef.current;
           if (current && p?.sessionId && p.sessionId !== current) return;
-          const text = p?.textZh ?? "";
-          if (text) {
+          const opts = p?.options ?? [];
+          if (opts.length > 0) {
             const store = storeRef.current;
-            store.setSuggestion(text);
+            store.setSuggestionOptions(opts);
             store.setUiState("suggesting");
             store.setLastStage("suggest");
           }

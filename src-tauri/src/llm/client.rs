@@ -163,30 +163,30 @@ pub fn translate_en_to_zh(cfg: &LlmConfig, text: &str) -> Result<String, String>
     chat_completion(cfg, prompt::translate_en_to_zh_system(), text)
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SummaryResult {
-    pub summary: String,
-    pub emotion: String,
+pub struct AgentSummaryResult {
+    pub mode: String,
+    pub emotion_speech: String,
+    pub summary_translation: String,
+    pub next_options: Vec<String>,
 }
 
-pub fn generate_summary_emotion(cfg: &LlmConfig, user_zh: &str, agent_output_zh: &str) -> Result<SummaryResult, String> {
+pub fn generate_agent_summary(cfg: &LlmConfig, user_zh: &str, agent_output_zh: &str) -> Result<AgentSummaryResult, String> {
     let user = format!(
-        "【用户原始需求（中文）】\n{}\n\n【Agent 输出（中文）】\n{}",
+        "【用户原始需求】\n{}\n\n【Agent 输出】\n{}",
         user_zh, agent_output_zh
     );
-    let text = chat_completion(cfg, prompt::summary_system_prompt(), &user)?;
-    let mut parts = text.split("\n\n").map(|s| s.trim().to_string());
-    let summary = parts.next().unwrap_or_default();
-    let emotion = parts.next().unwrap_or_else(|| "任务搞定啦，继续保持！".into());
-    Ok(SummaryResult { summary, emotion })
-}
+    let text = chat_completion(cfg, prompt::haruhi_system_prompt(), &user)?;
+    let cleaned = text
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
 
-pub fn suggest_next_steps(cfg: &LlmConfig, user_zh: &str, agent_output: &str) -> Result<String, String> {
-    let system = "You are a senior mentor. Reply in lively Simplified Chinese. Give concise bullets: improvements, next steps, risks. No markdown code fences unless showing short snippets.";
-    let user = format!(
-        "【用户原始需求（中文）】\n{}\n\n【Agent 输出】\n{}",
-        user_zh, agent_output
-    );
-    chat_completion(cfg, system, &user)
+    let parsed: AgentSummaryResult = serde_json::from_str(cleaned)
+        .map_err(|e| format!("JSON Parse Error: {}, Raw: {}", e, cleaned))?;
+        
+    Ok(parsed)
 }
