@@ -1,6 +1,7 @@
 import React from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useSettingsStore } from "../../stores/useSettingsStore";
+import { AgentBackendsSection } from "./AgentBackendsSection";
 
 import { invoke } from "@tauri-apps/api/core";
 
@@ -70,13 +71,14 @@ export function SettingsModal(): JSX.Element {
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 10 }}
               transition={{ type: "spring", damping: 25, stiffness: 300 }}
-              className="pointer-events-auto w-[90%] max-w-md rounded-2xl border border-white/60 bg-white/70 p-6 shadow-[0_20px_60px_rgba(0,0,0,0.12)] backdrop-blur-2xl dark:border-white/10 dark:bg-slate-800/60 dark:shadow-none"
+              className="pointer-events-auto flex max-h-[85vh] w-[92%] max-w-2xl flex-col rounded-2xl border border-white/60 bg-white/70 shadow-[0_20px_60px_rgba(0,0,0,0.12)] backdrop-blur-2xl dark:border-white/10 dark:bg-slate-800/60 dark:shadow-none"
             >
-              <h2 className="mb-6 text-xl font-bold text-zinc-800 dark:text-zinc-100">
-                全局设置
-              </h2>
+              <div className="flex items-center justify-between border-b border-black/5 px-6 py-4 dark:border-white/5">
+                <h2 className="text-xl font-bold text-zinc-800 dark:text-zinc-100">全局设置</h2>
+              </div>
 
-              <div className="flex flex-col gap-5">
+              <div className="flex flex-col gap-6 overflow-y-auto px-6 py-5">
+                <section className="flex flex-col gap-5">
                 <div className="flex flex-col gap-1.5">
                   <label className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
                     希望团长怎样称呼你？
@@ -127,9 +129,14 @@ export function SettingsModal(): JSX.Element {
                     className="rounded-lg border border-black/5 bg-white/50 px-3 py-2 text-sm text-zinc-800 outline-none transition-all focus:border-sky-400/50 focus:bg-white/80 focus:ring-2 focus:ring-sky-400/15 dark:border-white/5 dark:bg-slate-800/50 dark:text-zinc-100 dark:focus:border-sky-400/40 dark:focus:bg-slate-800/70 dark:focus:ring-sky-400/10"
                   />
                 </div>
+                </section>
+
+                <hr className="border-black/5 dark:border-white/5" />
+
+                <AgentBackendsSection isVisible={isSettingsModalOpen} />
               </div>
 
-              <div className="mt-8 flex justify-end gap-3">
+              <div className="flex justify-end gap-3 border-t border-black/5 px-6 py-4 dark:border-white/5">
                 <button
                   type="button"
                   onClick={closeSettingsModal}
