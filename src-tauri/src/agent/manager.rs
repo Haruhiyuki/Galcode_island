@@ -20,7 +20,7 @@ use crate::AppState;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 // ---------------------------------------------------------------------------
 // 会话与管理器
@@ -690,23 +690,57 @@ pub fn get_logs(state: Arc<AppState>, session_id: String) -> Result<Vec<String>,
     Ok(g.clone())
 }
 
-/// 用于 app 退出时清理所有 backend client。
-pub fn shutdown_runtime_clients(runtime_state: &RuntimeState) {
+/// App 退出时清理所有 backend 子进程。
+///
+/// 退出阶段必须**阻塞拿锁**完成清理，try_lock 拿不到就跳过是漏杀子进程的主因。
+/// 顺序：
+///   1. drain 三个 backend 各自的 client/state，逐个 kill 子进程树
+///   2. kill_opencode_listeners 兜底（防止 drain 漏掉的端口仍被占）
+///   3. kill_all_direct_children 杀掉所有未注册到 state 的直系子进程
+///   4. cleanup_stale_runtime_orphans 再扫一次 ppid==1 孤儿
+pub fn shutdown_runtime_clients(app: &AppHandle) {
+    use crate::agent::proc::{
+        cleanup_stale_runtime_orphans, kill_all_direct_children, kill_child_descendants,
+        kill_opencode_listeners,
+    };
     use crate::agent::runtime::{drain_claude_clients, drain_codex_clients, drain_opencode_states};
+
+    let runtime: tauri::State<Arc<RuntimeState>> = app.state();
+    let runtime_state: &RuntimeState = runtime.inner().as_ref();
+
+    // 多 tab 模式下遍历每个 run_id 各自的 OpencodeState，逐一杀掉子进程并收集端口。
+    let mut opencode_ports: Vec<u16> = Vec::new();
+    drain_opencode_states(runtime_state, |_run_id, opencode| {
+        if let Some(child) = opencode.child.as_mut() {
+            // 先递归杀 opencode 派生的子孙（node MCP servers、shell 工具等），
+            // 再杀主进程。缺了这一步 grandchildren 会被 launchd 收养变残留。
+            kill_child_descendants(child.id());
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        opencode_ports.push(opencode.port);
+        opencode.child = None;
+        opencode.session_id = None;
+        opencode.managed = false;
+    });
+    // OpenCode OAuth 回调用 1455 也加进来一起清
+    opencode_ports.push(1455);
+    let _ = kill_opencode_listeners(&opencode_ports);
+
+    for client in drain_codex_clients(runtime_state) {
+        client.stop();
+    }
 
     for client in drain_claude_clients(runtime_state) {
         kill_claude_client(&client);
     }
-    for client in drain_codex_clients(runtime_state) {
-        client.stop();
-    }
-    drain_opencode_states(runtime_state, |_run_id, opencode| {
-        if let Some(child) = opencode.child.as_mut() {
-            crate::agent::sysutils::kill_child_descendants(child.id());
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    });
+
+    // 兜底：杀掉本进程的所有直系子进程（包括未进 state 的 warmup / probe 残留），
+    // 退出前杀掉，否则它们会被 launchd 收养成 ppid==1 孤儿，那时已没人能扫它们。
+    kill_all_direct_children();
+
+    // 再扫一次 ppid==1 孤儿（上轮崩溃 / 强退留下的可能还在）
+    cleanup_stale_runtime_orphans(app);
 }
 
 fn kill_claude_client(client: &ClaudeStreamClient) {

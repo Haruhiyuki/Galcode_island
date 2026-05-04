@@ -83,6 +83,19 @@ pub fn run() {
             set_click_through,
             update_llm_settings,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| match event {
+            // 用户从 tray 选"退出"时 Tauri 触发 ExitRequested，先清子进程再放过 api。
+            // 桌面宠物的关窗 = 隐藏（on_window_event 已 prevent_close），不会走到这里；
+            // 真退出只可能由 tray 菜单的 app.exit(0) 或 ⌘Q 触发。
+            tauri::RunEvent::ExitRequested { api: _, .. } => {
+                agent::manager::shutdown_runtime_clients(app_handle);
+            }
+            // RunEvent::Exit 在退出最后一刻再触发一次，作兜底（清理函数幂等）。
+            tauri::RunEvent::Exit => {
+                agent::manager::shutdown_runtime_clients(app_handle);
+            }
+            _ => {}
+        });
 }

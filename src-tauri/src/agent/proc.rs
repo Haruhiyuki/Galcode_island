@@ -470,3 +470,84 @@ pub fn cleanup_stale_runtime_orphans(app: &AppHandle) {
 
 #[cfg(not(unix))]
 pub fn cleanup_stale_runtime_orphans(_app: &AppHandle) {}
+
+// ---------------------------------------------------------------------------
+// 退出时兜底：杀掉本进程的所有直系子进程（含未注册到 RuntimeState 的）
+// ---------------------------------------------------------------------------
+
+#[cfg(unix)]
+pub fn kill_all_direct_children() {
+    let current_pid = std::process::id();
+    let output = match Command::new("pgrep")
+        .arg("-P")
+        .arg(current_pid.to_string())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+    {
+        Ok(result) => result,
+        Err(_) => return,
+    };
+    if !output.status.success() {
+        return;
+    }
+    let children: Vec<u32> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.trim().parse::<u32>().ok())
+        .collect();
+
+    for child in &children {
+        kill_child_descendants(*child);
+        let _ = Command::new("kill")
+            .arg("-TERM")
+            .arg(child.to_string())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    std::thread::sleep(Duration::from_millis(120));
+    for child in &children {
+        let _ = Command::new("kill")
+            .arg("-KILL")
+            .arg(child.to_string())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+#[cfg(not(unix))]
+pub fn kill_all_direct_children() {
+    // Windows: taskkill /PID <self> /T /F 会连带把子进程都杀了，但我们不能杀自己。
+    // 换思路：用 PowerShell 找 ParentProcessId == self 的进程逐个 taskkill。
+    let current_pid = std::process::id();
+    let script = format!(
+        "Get-CimInstance Win32_Process -Filter \"ParentProcessId={}\" | ForEach-Object {{ $_.ProcessId }}",
+        current_pid
+    );
+    let mut ps = Command::new("powershell.exe");
+    configure_background_command(&mut ps);
+    let Ok(output) = ps
+        .args(["-NoProfile", "-NonInteractive", "-Command", script.as_str()])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return;
+    };
+    if !output.status.success() {
+        return;
+    }
+    for pid in String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.trim().parse::<u32>().ok())
+    {
+        let mut tk = Command::new("taskkill");
+        configure_background_command(&mut tk);
+        let _ = tk
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
