@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../../stores/useAppStore";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -10,13 +11,49 @@ export function ResultCard(): JSX.Element {
   const setTask = useAppStore((s) => s.setTask);
   const setUiState = useAppStore((s) => s.setUiState);
   const setMode = useAppStore((s) => s.setMode);
+  const setAgentStatus = useAppStore((s) => s.setAgentStatus);
+  const setSessionId = useAppStore((s) => s.setSessionId);
+  const setPercent = useAppStore((s) => s.setPercent);
+  const setResultZh = useAppStore((s) => s.setResultZh);
+  const setSummaryTranslation = useAppStore((s) => s.setSummaryTranslation);
+  const setEmotionText = useAppStore((s) => s.setEmotionText);
+  const setSuggestionOptions = useAppStore((s) => s.setSuggestionOptions);
+  const addLogEntry = useAppStore((s) => s.addLogEntry);
 
   const isVisible = uiState === "done" || uiState === "error" || mode === "complete" || mode === "suggestion" || mode === "error";
 
-  const handleOptionClick = (opt: string) => {
+  /// 点选项 = 立即启动新一轮（不回 idle，避免 InputBubble 还没显示就把上一轮的
+  /// 状态条都清掉造成"白屏"）
+  const handleOptionClick = async (opt: string) => {
     setTask(opt);
-    setUiState("idle");
-    setMode("idle");
+    setSessionId(null);
+    setPercent(0);
+    setResultZh("");
+    setSummaryTranslation("");
+    setEmotionText("");
+    setSuggestionOptions([]);
+    setUiState("running");
+    setMode("working");
+    setAgentStatus("running");
+
+    const { selectedAgent, projectPath } = useAppStore.getState();
+    try {
+      const res = await invoke<{ sessionId?: string }>("start_agent", {
+        userInputZh: opt,
+        cwd: projectPath || ".",
+        agent: selectedAgent,
+      });
+      if (res?.sessionId) setSessionId(res.sessionId);
+    } catch (err) {
+      addLogEntry({
+        timestamp: Date.now(),
+        level: "error",
+        message: `launch err: ${String(err)}`,
+      });
+      setUiState("error");
+      setMode("error");
+      setAgentStatus("error");
+    }
   };
 
   const isError = mode === "error" || uiState === "error";
