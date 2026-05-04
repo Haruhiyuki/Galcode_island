@@ -13,18 +13,18 @@ export function LaunchButton(): JSX.Element {
   const setBubble = useAppStore((s) => s.setBubble);
   const setPercent = useAppStore((s) => s.setPercent);
   const setResultZh = useAppStore((s) => s.setResultZh);
-  const setSummaryText = useAppStore((s) => s.setSummaryText);
+  const setSummaryTranslation = useAppStore((s) => s.setSummaryTranslation);
   const setEmotionText = useAppStore((s) => s.setEmotionText);
-  const setSuggestion = useAppStore((s) => s.setSuggestion);
+  const setSuggestionOptions = useAppStore((s) => s.setSuggestionOptions);
   const clearLogs = useAppStore((s) => s.clearLogs);
   const addLogEntry = useAppStore((s) => s.addLogEntry);
 
   const launch = useCallback(async () => {
     clearLogs();
     setResultZh("");
-    setSummaryText("");
+    setSummaryTranslation("");
     setEmotionText("");
-    setSuggestion("");
+    setSuggestionOptions([]);
     setPercent(0);
     setUiState("running");
     setLastStage("init");
@@ -48,8 +48,8 @@ export function LaunchButton(): JSX.Element {
       });
     }
   }, [
-    task, projectPath, clearLogs, setResultZh, setSummaryText, setEmotionText,
-    setSuggestion, setPercent, setUiState, setLastStage, setBubble,
+    task, projectPath, clearLogs, setResultZh, setSummaryTranslation, setEmotionText,
+    setSuggestionOptions, setPercent, setUiState, setLastStage, setBubble,
     setSessionId, addLogEntry,
   ]);
 

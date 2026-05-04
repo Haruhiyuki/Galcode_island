@@ -16,6 +16,9 @@ pub enum AgentStatus {
     Error,
 }
 
+/// 所有变体都用 `Emit` 前缀是有意为之 —— 它们都是"待发射的 IPC 事件"，
+/// 前缀强调语义而不是冗余。
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone)]
 pub enum SideEffect {
     EmitStatusChanged {

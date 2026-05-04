@@ -1,8 +1,11 @@
+pub mod binary;
 pub mod claude;
 pub mod codex;
-pub mod config;
-pub mod launcher;
+pub mod demo;
 pub mod manager;
 pub mod opencode;
+pub mod proc;
+pub mod proxy;
 pub mod runtime;
+pub mod stream;
 pub mod sysutils;

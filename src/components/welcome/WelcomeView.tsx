@@ -30,7 +30,7 @@ const charVariants = {
     y: 0,
     rotate: 0,
     filter: "blur(0px)",
-    transition: { type: "spring", damping: 12, stiffness: 200, mass: 0.6 },
+    transition: { type: "spring" as const, damping: 12, stiffness: 200, mass: 0.6 },
   },
 };
 

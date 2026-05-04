@@ -1,0 +1,5 @@
+[toolchain]
+# 锁定 Rust 工具链版本，避免新人/CI 用更老的 rustc 时踩 darling/plist/serde_with/time
+# 等 transitive dep 要求 1.88+ 的坑（Cargo.lock 已固定到 1.88+ 版本）。
+channel = "stable"
+components = ["rustfmt", "clippy"]

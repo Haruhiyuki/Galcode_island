@@ -10,8 +10,7 @@
 //
 // 老 demo 路径保留（python scripts/demo_agent.py），用于不依赖外部 CLI 的烟测。
 
-use super::config::preset_demo;
-use super::launcher::{resolve_demo_script, spawn_demo_process};
+use super::demo::{preset_demo, resolve_demo_script, spawn_demo_process};
 use crate::agent::runtime::{ClaudeStreamClient, RuntimeState, DEFAULT_RUN_ID};
 use crate::agent::{claude as claude_agent, codex as codex_agent, opencode as opencode_agent};
 use crate::hook::event::HookEvent;
@@ -753,7 +752,7 @@ fn run_stdout_loop(
     let mut last_result_en: Option<String> = None;
     let mut agent_errored = false;
 
-    for line in reader.lines().flatten() {
+    for line in reader.lines().map_while(Result::ok) {
         let line = line.trim().to_string();
         if line.is_empty() {
             continue;

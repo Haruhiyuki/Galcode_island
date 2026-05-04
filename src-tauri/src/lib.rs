@@ -1,3 +1,14 @@
+// 这些 lint 在 backend 模块里"看着像问题但其实合理"，统一在 crate 级别抑制：
+//   - needless_return: cfg(target_os) 平台分支里 return 是必须的（编译期只激活一个分支，
+//     单分支视角下 return 后面"无代码"看似冗余，但少了 return 类型不匹配）
+//   - too_many_arguments: backend launch/turn 函数固有参数多 (cwd/model/effort/proxy/binary/...)
+//   - type_complexity: Arc<Mutex<HashMap<...>>> 等并发数据结构的复杂签名是设计本身
+#![allow(
+    clippy::needless_return,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
+
 mod agent;
 mod hook;
 mod ipc;
@@ -23,6 +34,12 @@ impl AppState {
         Self {
             manager: Arc::new(std::sync::Mutex::new(agent::manager::AgentManager::new())),
         }
+    }
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

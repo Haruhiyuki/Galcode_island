@@ -4,10 +4,17 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
+    "dev": "tauri dev",
+    "dev:web": "vite",
+    "build": "tauri build",
+    "build:web": "vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "typecheck": "tsc -b --noEmit",
+    "check:rust": "cd src-tauri && cargo check",
+    "fmt:rust": "cd src-tauri && cargo fmt",
+    "lint:rust": "cd src-tauri && cargo clippy --all-targets -- -D warnings",
+    "clean": "rm -rf dist src-tauri/target"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.2.4",
@@ -24,6 +31,7 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
+    "@types/node": "^25.6.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^4.6.0",
