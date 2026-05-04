@@ -18,8 +18,11 @@ mod window_utils;
 use tauri::Manager;
 
 use ipc::commands::{
-    get_session_logs, respond_permission, select_project_folder, set_click_through, start_agent,
-    stop_agent, translate_only, update_llm_settings,
+    claude_login_open, claude_models, claude_send_prompt, claude_status, claude_verify,
+    codex_login_open, codex_send_prompt, codex_status, codex_verify, get_session_logs,
+    opencode_create_session, opencode_send_prompt, opencode_start, opencode_status, opencode_stop,
+    respond_permission, select_project_folder, set_click_through, start_agent, stop_agent,
+    translate_only, update_llm_settings,
 };
 use std::sync::Arc;
 
@@ -74,6 +77,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            // 通用
             select_project_folder,
             start_agent,
             stop_agent,
@@ -82,6 +86,23 @@ pub fn run() {
             translate_only,
             set_click_through,
             update_llm_settings,
+            // Claude Code
+            claude_status,
+            claude_models,
+            claude_verify,
+            claude_login_open,
+            claude_send_prompt,
+            // Codex
+            codex_status,
+            codex_verify,
+            codex_login_open,
+            codex_send_prompt,
+            // OpenCode
+            opencode_status,
+            opencode_start,
+            opencode_stop,
+            opencode_create_session,
+            opencode_send_prompt,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

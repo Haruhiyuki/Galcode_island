@@ -12,8 +12,10 @@
 
 use crate::agent::runtime::*;
 use crate::agent::sysutils::*;
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -22,6 +24,30 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::AppHandle;
+
+// ---------------------------------------------------------------------------
+// API 响应类型
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexStatus {
+    pub installed: bool,
+    pub version: Option<String>,
+    pub binary: String,
+    pub logged_in: bool,
+    pub login_status: String,
+    pub auth_method: Option<String>,
+    pub default_model: Option<String>,
+    pub default_reasoning_effort: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexVerifyResult {
+    pub ok: bool,
+    pub message: String,
+}
 
 // ---------------------------------------------------------------------------
 // 块事件辅助
@@ -1357,4 +1383,248 @@ pub fn run_codex_app_server_turn(
     };
 
     Ok((thread_id, summary))
+}
+
+// ---------------------------------------------------------------------------
+// 配置读取（~/.codex/config.toml）
+// ---------------------------------------------------------------------------
+
+pub fn read_codex_root_setting(key: &str) -> Option<String> {
+    let config_path = codex_config_file()?;
+    let content = fs::read_to_string(config_path).ok()?;
+    content.lines().find_map(|line| {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') || trimmed.starts_with('[') {
+            return None;
+        }
+        let (lhs, value) = trimmed.split_once('=')?;
+        if lhs.trim() != key {
+            return None;
+        }
+        let normalized = value.trim().trim_matches('"').trim_matches('\'');
+        if normalized.is_empty() {
+            None
+        } else {
+            Some(normalized.to_string())
+        }
+    })
+}
+
+pub fn read_codex_default_model() -> Option<String> {
+    read_codex_root_setting("model")
+}
+
+pub fn read_codex_default_reasoning_effort() -> Option<String> {
+    read_codex_root_setting("model_reasoning_effort")
+}
+
+// ---------------------------------------------------------------------------
+// 登录/状态
+// ---------------------------------------------------------------------------
+
+pub fn codex_login_status(
+    binary: &Path,
+    cwd: &Path,
+) -> Result<(bool, String, Option<String>), String> {
+    // Windows 上 codex login status 偶尔会因沙盒初始化或 auth.json 锁卡住。
+    // 原 .output() 无超时会导致整体阻塞。加 5s 硬上限。
+    let mut command = Command::new(binary);
+    configure_background_command(&mut command);
+    apply_codex_windows_sandbox_override(&mut command);
+    let child = command
+        .arg("login")
+        .arg("status")
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("Failed to inspect Codex login status: {error}"))?;
+    let output = wait_child_output_with_timeout(child, CLI_VERIFY_TIMEOUT)
+        .map_err(|error| format!("Failed to inspect Codex login status: {error}"))?;
+
+    let stdout = strip_cli_warning_lines(&trim_output(&output.stdout));
+    let stderr = strip_cli_warning_lines(&trim_output(&output.stderr));
+    let text = if !stdout.is_empty() { stdout } else { stderr };
+
+    if text.is_empty() {
+        return Ok((false, "未检测到 Codex 登录状态。".to_string(), None));
+    }
+
+    let logged_in = text.contains("Logged in");
+    let auth_method = text
+        .strip_prefix("Logged in using ")
+        .map(|value| value.trim().to_string())
+        .or_else(|| {
+            text.strip_prefix("Logged in via ")
+                .map(|value| value.trim().to_string())
+        });
+
+    Ok((logged_in, text, auth_method))
+}
+
+pub fn codex_status_snapshot(
+    app: &AppHandle,
+    requested_binary: Option<&str>,
+) -> Result<CodexStatus, String> {
+    let root = resolve_project_root(app)?;
+    let binary = resolve_codex_binary(app, requested_binary);
+    let version = command_version(&binary, "--version", &root);
+    let installed = version.is_some();
+    let (logged_in, login_status, auth_method) = if installed {
+        codex_login_status(&binary, &root)?
+    } else {
+        (false, "未检测到 Codex CLI。".to_string(), None)
+    };
+
+    Ok(CodexStatus {
+        installed,
+        version,
+        binary: binary.display().to_string(),
+        logged_in,
+        login_status,
+        auth_method,
+        default_model: read_codex_default_model(),
+        default_reasoning_effort: read_codex_default_reasoning_effort(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Probe / Login terminal
+// ---------------------------------------------------------------------------
+
+pub fn codex_probe_sandbox_mode() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "danger-full-access"
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        "read-only"
+    }
+}
+
+pub fn extract_codex_last_message(events: &[Value]) -> String {
+    for event in events.iter().rev() {
+        // codex exec --json 输出格式：{"type": "agent_message", "text": "..."} 或 message
+        if let Some(text) = event
+            .get("text")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return text.to_string();
+        }
+        if let Some(text) = event
+            .get("message")
+            .and_then(|m| m.get("text"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return text.to_string();
+        }
+    }
+    String::new()
+}
+
+pub fn open_codex_login_terminal(
+    app: &AppHandle,
+    requested_binary: Option<&str>,
+    device_auth: bool,
+    proxy: Option<&str>,
+) -> Result<String, String> {
+    let binary = resolve_codex_binary(app, requested_binary);
+    let proxy_prefix = proxy_env_prefix(proxy);
+    let mut trailing_args = vec!["login".to_string()];
+    if device_auth {
+        trailing_args.push("--device-auth".to_string());
+    }
+    let command_text = format!(
+        "{proxy_prefix}{}",
+        shell_command_text(&binary, &[], &trailing_args)
+    );
+    open_terminal_command(
+        &command_text,
+        if device_auth {
+            "已在系统终端中打开 `codex login --device-auth`。完成登录后回到软件点\u{201c}刷新状态\u{201d}或\u{201c}验证连接\u{201d}。"
+        } else {
+            "已在系统终端中打开 `codex login`。完成登录后回到软件点\u{201c}刷新状态\u{201d}或\u{201c}验证连接\u{201d}。"
+        },
+    )
+}
+
+pub fn run_codex_probe(
+    app: &AppHandle,
+    model: Option<&str>,
+    reasoning_effort: Option<&str>,
+    requested_binary: Option<&str>,
+    proxy: Option<&str>,
+) -> Result<String, String> {
+    let root = resolve_project_root(app)?;
+    let binary = resolve_codex_binary(app, requested_binary);
+    let mut command = Command::new(&binary);
+    configure_background_command(&mut command);
+    apply_codex_windows_sandbox_override(&mut command);
+    command
+        .arg("exec")
+        .arg("--json")
+        .arg("--ephemeral")
+        .arg("--skip-git-repo-check")
+        .arg("-s")
+        .arg(codex_probe_sandbox_mode())
+        .arg("-C")
+        .arg(&root);
+
+    if let Some(model) = model.filter(|value| !value.trim().is_empty()) {
+        command.arg("-m").arg(model);
+    }
+    if let Some(reasoning_effort) = reasoning_effort.filter(|value| !value.trim().is_empty()) {
+        command
+            .arg("-c")
+            .arg(codex_config_override("model_reasoning_effort", reasoning_effort));
+    }
+
+    apply_proxy_env(&mut command, proxy);
+
+    command
+        .arg("-")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("Failed to start Codex probe: {error}"))?;
+
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin
+            .write_all(b"Reply with exactly OK.")
+            .map_err(|error| format!("Failed to write probe prompt to Codex CLI: {error}"))?;
+    }
+
+    drop(child.stdin.take());
+
+    let output = wait_child_output_with_timeout(child, CLI_VERIFY_TIMEOUT)?;
+
+    let stdout = trim_output(&output.stdout);
+    let stderr = strip_cli_warning_lines(&trim_output(&output.stderr));
+    if !output.status.success() {
+        return Err(if !stderr.is_empty() { stderr } else { stdout });
+    }
+
+    let mut events = Vec::new();
+    for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
+        if let Ok(event) = serde_json::from_str::<Value>(line) {
+            events.push(event);
+        }
+    }
+
+    let last_message = extract_codex_last_message(&events);
+    Ok(if last_message.trim().is_empty() {
+        "Codex 请求已完成，但没有返回最终消息。".to_string()
+    } else {
+        last_message
+    })
 }
