@@ -1,7 +1,6 @@
 pub mod binary;
 pub mod claude;
 pub mod codex;
-pub mod demo;
 pub mod manager;
 pub mod opencode;
 pub mod proc;

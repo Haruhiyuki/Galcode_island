@@ -2,13 +2,9 @@ import { useEffect, useRef } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useAppStore } from "../stores/useAppStore";
 import type {
-  AgentDonePayload,
-  AgentProgressPayload,
   ErrorPayload,
-  LogPayload,
   SessionCompletePayload,
   StatusChangedPayload,
-  SuggestionReadyPayload,
 } from "../types/ipc";
 
 function mapAgentStatusToStage(st: string): "default" | "init" | "thinking" | "working" | "done" | "error" {
@@ -61,19 +57,6 @@ export function useAgentIPC(): void {
       );
 
       unsubs.push(
-        await listen<LogPayload>("agent://log", (e) => {
-          const p = e.payload;
-          forSession(p?.sessionId, () => {
-            storeRef.current.addLogEntry({
-              timestamp: Date.now(),
-              level: (p.level as "info" | "warn" | "error") ?? "info",
-              message: p.message,
-            });
-          });
-        }),
-      );
-
-      unsubs.push(
         await listen<SessionCompletePayload>("agent://session-complete", (e) => {
           const p = e.payload;
           forSession(p?.sessionId, () => {
@@ -114,52 +97,6 @@ export function useAgentIPC(): void {
         }),
       );
 
-      unsubs.push(
-        await listen<AgentProgressPayload>("agent-progress", (e) => {
-          const p = e.payload;
-          const current = sessionRef.current;
-          if (p?.sessionId && current && p.sessionId !== current) return;
-          const store = storeRef.current;
-          store.setUiState("running");
-          if (p?.stage) store.setLastStage(p.stage as "init" | "thinking" | "working" | "done" | "error");
-          if (typeof p?.percent === "number") {
-            store.setPercent(Math.max(0, Math.min(100, p.percent)));
-          }
-          if (p?.message) store.setBubble(p.message);
-          if (p?.rawLine) {
-            store.addLogEntry({
-              timestamp: Date.now(),
-              level: "info",
-              message: p.rawLine,
-            });
-          }
-        }),
-      );
-
-      unsubs.push(
-        await listen<AgentDonePayload>("agent-done", (e) => {
-          const p = e.payload;
-          const current = sessionRef.current;
-          if (current && p?.sessionId && p.sessionId !== current) return;
-          const zh = p?.resultZh ?? "";
-          if (zh) storeRef.current.setResultZh(zh);
-        }),
-      );
-
-      unsubs.push(
-        await listen<SuggestionReadyPayload>("suggestion-ready", (e) => {
-          const p = e.payload;
-          const current = sessionRef.current;
-          if (current && p?.sessionId && p.sessionId !== current) return;
-          const opts = p?.options ?? [];
-          if (opts.length > 0) {
-            const store = storeRef.current;
-            store.setSuggestionOptions(opts);
-            store.setUiState("suggesting");
-            store.setLastStage("suggest");
-          }
-        }),
-      );
     };
 
     run();

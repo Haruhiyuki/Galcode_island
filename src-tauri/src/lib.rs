@@ -10,7 +10,6 @@
 )]
 
 mod agent;
-mod hook;
 mod ipc;
 mod llm;
 mod session;
@@ -19,8 +18,8 @@ mod window_utils;
 use tauri::Manager;
 
 use ipc::commands::{
-    get_session_logs, launch_agent, respond_permission, select_project_folder, set_click_through,
-    start_agent, stop_agent, translate_only, update_llm_settings,
+    get_session_logs, respond_permission, select_project_folder, set_click_through, start_agent,
+    stop_agent, translate_only, update_llm_settings,
 };
 use std::sync::Arc;
 
@@ -53,8 +52,6 @@ pub fn run() {
         .manage(Arc::new(AppState::new()))
         .manage(Arc::new(agent::runtime::RuntimeState::default()))
         .setup(|app| {
-            hook::watcher::try_spawn_hook_log_watcher();
-
             let handle = app.handle().clone();
             let state = app.state::<Arc<AppState>>();
             session::cleanup::spawn_idle_cleanup_loop(handle.clone(), Arc::clone(&state));
@@ -79,7 +76,6 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             select_project_folder,
             start_agent,
-            launch_agent,
             stop_agent,
             respond_permission,
             get_session_logs,

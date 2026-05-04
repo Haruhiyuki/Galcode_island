@@ -39,7 +39,7 @@ pub fn start_agent(
 
     let prev = {
         let mgr = state.manager.lock().map_err(|e| e.to_string())?;
-        mgr.active_demo_session.clone()
+        mgr.active_session.clone()
     };
     if let Some(sid) = prev {
         let _ = manager::stop_session(
@@ -72,51 +72,11 @@ pub fn start_agent(
             cwd,
             user_input_zh,
         ),
-        "demo" => manager::launch_demo_agent(app, Arc::clone(state.inner()), cwd, user_input_zh),
         _ => Err(format!("暂不支持的 agent 类型: {}", agent_type)),
     }
 }
 
-#[tauri::command]
-pub fn launch_agent(
-    app: AppHandle,
-    state: State<Arc<AppState>>,
-    runtime_state: State<Arc<RuntimeState>>,
-    agent: String,
-    cwd: String,
-    task_zh: Option<String>,
-) -> Result<LaunchResult, String> {
-    let task = task_zh
-        .clone()
-        .ok_or_else(|| format!("{} agent 需要参数 task_zh", agent))?;
-    match agent.as_str() {
-        "claude-code" => manager::launch_claude_agent(
-            app,
-            Arc::clone(state.inner()),
-            Arc::clone(runtime_state.inner()),
-            cwd,
-            task,
-        ),
-        "opencode" => manager::launch_opencode_agent(
-            app,
-            Arc::clone(state.inner()),
-            Arc::clone(runtime_state.inner()),
-            cwd,
-            task,
-        ),
-        "codex" => manager::launch_codex_agent(
-            app,
-            Arc::clone(state.inner()),
-            Arc::clone(runtime_state.inner()),
-            cwd,
-            task,
-        ),
-        "demo" => manager::launch_demo_agent(app, Arc::clone(state.inner()), cwd, task),
-        _ => Err(format!("暂不支持的 agent 类型: {}", agent)),
-    }
-}
-
-/// `session_id` 省略时停止当前 `active_demo_session`。
+/// `session_id` 省略时停止当前 `active_session`。
 #[tauri::command]
 pub fn stop_agent(
     app: AppHandle,
@@ -130,7 +90,7 @@ pub fn stop_agent(
                 .manager
                 .lock()
                 .ok()
-                .and_then(|m| m.active_demo_session.clone())
+                .and_then(|m| m.active_session.clone())
         })
         .ok_or_else(|| "没有可停止的会话".to_string())?;
     manager::stop_session(
