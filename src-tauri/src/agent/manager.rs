@@ -648,29 +648,58 @@ fn finalize_session(
         Err(_) => None,
     };
 
-    let result_zh = match llm {
-        Some(cfg) => translate_en_to_zh(cfg, &result_en).unwrap_or_else(|_| result_en.clone()),
-        None => result_en.clone(),
+    // 翻译输出 + 生成 summary 并发——summary 不需要等翻译完成的中文，直接吃英文
+    // 也能正确理解（DeepSeek 跨语言无压力）。串行约 5-15s 改并发后取 max(两者)。
+    let (result_zh, summary_result) = match llm {
+        Some(cfg) => {
+            let cfg_translate = cfg.clone();
+            let cfg_summary = cfg.clone();
+            let result_for_translate = result_en.clone();
+            let result_for_summary = result_en.clone();
+            let user_zh_owned = user_zh.to_string();
+
+            let t_parallel = std::time::Instant::now();
+            let h_translate = std::thread::spawn(move || {
+                translate_en_to_zh(&cfg_translate, &result_for_translate)
+            });
+            let h_summary = std::thread::spawn(move || {
+                generate_agent_summary(&cfg_summary, &user_zh_owned, &result_for_summary)
+            });
+
+            let translated = h_translate
+                .join()
+                .ok()
+                .and_then(|r| r.ok())
+                .unwrap_or_else(|| result_en.clone());
+            let summary = h_summary.join().ok().and_then(|r| match r {
+                Ok(s) => Some(Ok(s)),
+                Err(e) => Some(Err(e)),
+            });
+            eprintln!(
+                "[finalize] parallel translate_out + summary done in {}ms",
+                t_parallel.elapsed().as_millis()
+            );
+            (translated, summary)
+        }
+        None => (result_en.clone(), None),
     };
 
-    let (mode, emotion, summary, suggestion_options) = match llm {
-        Some(cfg) => match generate_agent_summary(cfg, user_zh, &result_zh) {
-            Ok(s) => (
-                Some(s.mode),
-                Some(s.emotion_speech),
-                Some(s.summary_translation),
-                Some(s.next_options),
-            ),
-            Err(e) => (
-                Some("error".into()),
-                Some(format!("LLM 总结生成失败: {}", e)),
-                Some(format!(
-                    "Agent 原始输出:\n{}",
-                    result_zh.chars().take(500).collect::<String>()
-                )),
-                Some(vec!["重试".into()]),
-            ),
-        },
+    let (mode, emotion, summary, suggestion_options) = match summary_result {
+        Some(Ok(s)) => (
+            Some(s.mode),
+            Some(s.emotion_speech),
+            Some(s.summary_translation),
+            Some(s.next_options),
+        ),
+        Some(Err(e)) => (
+            Some("error".into()),
+            Some(format!("LLM 总结生成失败: {}", e)),
+            Some(format!(
+                "Agent 原始输出:\n{}",
+                result_zh.chars().take(500).collect::<String>()
+            )),
+            Some(vec!["重试".into()]),
+        ),
         None => {
             let no_llm_hint = "未配置 LLM API Key（在设置中配置后，将自动总结 Agent 输出）";
             (
