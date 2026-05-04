@@ -20,9 +20,9 @@ use tauri::Manager;
 use ipc::commands::{
     claude_login_open, claude_models, claude_send_prompt, claude_status, claude_verify,
     codex_login_open, codex_send_prompt, codex_status, codex_verify, get_session_logs,
-    opencode_create_session, opencode_send_prompt, opencode_start, opencode_status, opencode_stop,
-    respond_permission, select_project_folder, set_click_through, start_agent, stop_agent,
-    translate_only, update_backend_preferences, update_llm_settings,
+    list_llm_models, opencode_create_session, opencode_send_prompt, opencode_start,
+    opencode_status, opencode_stop, respond_permission, select_project_folder, set_click_through,
+    start_agent, stop_agent, translate_only, update_backend_preferences, update_llm_settings,
 };
 use std::sync::Arc;
 
@@ -87,6 +87,7 @@ pub fn run() {
             set_click_through,
             update_llm_settings,
             update_backend_preferences,
+            list_llm_models,
             // Claude Code
             claude_status,
             claude_models,

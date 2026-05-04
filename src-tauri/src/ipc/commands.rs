@@ -137,9 +137,32 @@ pub fn update_llm_settings(
     api_key: String,
     nickname: String,
     system_prompt: String,
+    provider: Option<String>,
+    model: Option<String>,
+    thinking: Option<bool>,
 ) -> Result<(), String> {
-    crate::llm::client::update_global_settings(base_url, api_key, nickname, system_prompt);
+    crate::llm::client::update_global_settings(
+        base_url,
+        api_key,
+        nickname,
+        system_prompt,
+        provider.unwrap_or_default(),
+        model.unwrap_or_default(),
+        thinking.unwrap_or(false),
+    );
     Ok(())
+}
+
+/// 拉取 OpenAI 兼容服务商的模型列表（DeepSeek / OpenAI / Moonshot / 通义 / 智谱 等）。
+/// `base_url` 和 `apiKey` 由前端传入，因为用户可能在保存前就想试探。
+#[tauri::command]
+pub async fn list_llm_models(
+    base_url: String,
+    api_key: String,
+) -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(move || crate::llm::client::list_models(&base_url, &api_key))
+        .await
+        .map_err(|error| format!("list_llm_models task failed: {error}"))?
 }
 
 /// 写入某个 backend 的运行时偏好（model / effort / proxy / binary，全部 Option）。

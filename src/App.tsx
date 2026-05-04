@@ -26,6 +26,9 @@ function App(): JSX.Element {
       apiKey: state.apiKey,
       nickname: state.nickname,
       systemPrompt: state.systemPrompt,
+      provider: state.provider,
+      model: state.model,
+      thinking: state.thinking,
     }).catch(console.error);
 
     for (const backend of ["claude-code", "codex", "opencode"] as const) {
