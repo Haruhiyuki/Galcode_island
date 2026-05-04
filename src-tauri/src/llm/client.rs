@@ -231,8 +231,9 @@ pub fn translate_en_to_zh(cfg: &LlmConfig, text: &str) -> Result<String, String>
     chat_completion(cfg, prompt::translate_en_to_zh_system(), text, Some(false))
 }
 
+/// LLM 输出契约用 snake_case（见 prompt 模板里要求的 JSON 结构），
+/// 这里直接默认 snake_case，不要加 rename_all。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct AgentSummaryResult {
     pub mode: String,
     pub emotion_speech: String,
