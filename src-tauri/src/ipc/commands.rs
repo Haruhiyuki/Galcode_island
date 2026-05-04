@@ -176,20 +176,31 @@ pub fn set_click_through(app: AppHandle, enabled: bool) -> Result<(), String> {
 // Claude Code
 // ---------------------------------------------------------------------------
 
+// status / models 内部会 spawn `claude --version` / `claude auth status` /
+// `claude --help` 三个子进程顺序 wait（首次还要 stage bundled binary 复制 ~220MB）
+// 整体 4-8s 是常态。改成 async + spawn_blocking 把阻塞挪到 tokio blocking pool，
+// 主线程不卡，前端 SettingsModal 能立即弹出再异步刷新状态条。
+
 #[tauri::command]
-pub fn claude_status(
+pub async fn claude_status(
     app: AppHandle,
     binary: Option<String>,
 ) -> Result<CliRuntimeStatus, String> {
-    claude_agent::claude_status_snapshot(&app, binary.as_deref())
+    let handle = app.clone();
+    tokio::task::spawn_blocking(move || claude_agent::claude_status_snapshot(&handle, binary.as_deref()))
+        .await
+        .map_err(|error| format!("claude_status task failed: {error}"))?
 }
 
 #[tauri::command]
-pub fn claude_models(
+pub async fn claude_models(
     app: AppHandle,
     binary: Option<String>,
 ) -> Result<ClaudeModelsResult, String> {
-    claude_agent::build_claude_model_catalog(&app, binary.as_deref())
+    let handle = app.clone();
+    tokio::task::spawn_blocking(move || claude_agent::build_claude_model_catalog(&handle, binary.as_deref()))
+        .await
+        .map_err(|error| format!("claude_models task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -217,12 +228,17 @@ pub async fn claude_verify(
 }
 
 #[tauri::command]
-pub fn claude_login_open(
+pub async fn claude_login_open(
     app: AppHandle,
     binary: Option<String>,
     proxy: Option<String>,
 ) -> Result<String, String> {
-    claude_agent::open_claude_login_terminal(&app, binary.as_deref(), proxy.as_deref())
+    let handle = app.clone();
+    tokio::task::spawn_blocking(move || {
+        claude_agent::open_claude_login_terminal(&handle, binary.as_deref(), proxy.as_deref())
+    })
+    .await
+    .map_err(|error| format!("claude_login_open task failed: {error}"))?
 }
 
 /// Claude 原始 turn —— 不翻译、不套总结，直接走 stream-json。
@@ -273,8 +289,11 @@ pub async fn claude_send_prompt(
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub fn codex_status(app: AppHandle, binary: Option<String>) -> Result<CodexStatus, String> {
-    codex_agent::codex_status_snapshot(&app, binary.as_deref())
+pub async fn codex_status(app: AppHandle, binary: Option<String>) -> Result<CodexStatus, String> {
+    let handle = app.clone();
+    tokio::task::spawn_blocking(move || codex_agent::codex_status_snapshot(&handle, binary.as_deref()))
+        .await
+        .map_err(|error| format!("codex_status task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -302,18 +321,23 @@ pub async fn codex_verify(
 }
 
 #[tauri::command]
-pub fn codex_login_open(
+pub async fn codex_login_open(
     app: AppHandle,
     binary: Option<String>,
     device_auth: Option<bool>,
     proxy: Option<String>,
 ) -> Result<String, String> {
-    codex_agent::open_codex_login_terminal(
-        &app,
-        binary.as_deref(),
-        device_auth.unwrap_or(false),
-        proxy.as_deref(),
-    )
+    let handle = app.clone();
+    tokio::task::spawn_blocking(move || {
+        codex_agent::open_codex_login_terminal(
+            &handle,
+            binary.as_deref(),
+            device_auth.unwrap_or(false),
+            proxy.as_deref(),
+        )
+    })
+    .await
+    .map_err(|error| format!("codex_login_open task failed: {error}"))?
 }
 
 /// Codex 原始 turn —— 通过 app-server JSON-RPC，不翻译、不套总结。
