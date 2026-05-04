@@ -1,6 +1,7 @@
 import { motion, AnimatePresence } from "framer-motion";
 import { useAppStore } from "../../stores/useAppStore";
 import { AgentStatusBadge } from "./AgentStatusBadge";
+import { BlockStream } from "./BlockStream";
 import { TodoProgress } from "./TodoProgress";
 import { LogStream } from "./LogStream";
 
@@ -24,6 +25,7 @@ export function StatusMonitor(): JSX.Element {
             <AgentStatusBadge />
           </div>
           <TodoProgress />
+          <BlockStream />
           <LogStream />
         </motion.section>
       )}

@@ -490,6 +490,107 @@ pub fn claude_stream_error_message(event: &Value) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
+// 文件编辑 diff 提取
+// ---------------------------------------------------------------------------
+
+/// 从 Claude stream-json 的 assistant 消息里解析 Edit / MultiEdit / Write 工具调用，
+/// 生成 `galcode.block` diff 块塞回前端。简化版 diff：old→`-` 行、new→`+` 行，
+/// 不做 LCS 对齐——文件 diff 看 +/- 已经直观，对齐留给前端工具调用查看器。
+pub fn extract_claude_diff_blocks(event: &Value) -> Vec<Value> {
+    let mut out = Vec::new();
+    let Some(content) = event
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(Value::as_array)
+    else {
+        return out;
+    };
+
+    for item in content {
+        if item.get("type").and_then(Value::as_str) != Some("tool_use") {
+            continue;
+        }
+        let name = item.get("name").and_then(Value::as_str).unwrap_or("");
+        let id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| format!("tool-{}", chrono::Utc::now().timestamp_millis()));
+        let input = match item.get("input") {
+            Some(value) => value,
+            None => continue,
+        };
+
+        let block = match name {
+            "Edit" => {
+                let path = input.get("file_path").and_then(Value::as_str).unwrap_or("");
+                let old = input.get("old_string").and_then(Value::as_str).unwrap_or("");
+                let new = input.get("new_string").and_then(Value::as_str).unwrap_or("");
+                if path.is_empty() && old.is_empty() && new.is_empty() {
+                    continue;
+                }
+                build_diff_block(&id, "Edit", path, &simple_diff(old, new))
+            }
+            "MultiEdit" => {
+                let path = input.get("file_path").and_then(Value::as_str).unwrap_or("");
+                let edits = input
+                    .get("edits")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut diff_text = String::new();
+                for (i, edit) in edits.iter().enumerate() {
+                    let old = edit.get("old_string").and_then(Value::as_str).unwrap_or("");
+                    let new = edit.get("new_string").and_then(Value::as_str).unwrap_or("");
+                    if i > 0 {
+                        diff_text.push_str("\n@@\n");
+                    }
+                    diff_text.push_str(&simple_diff(old, new));
+                }
+                build_diff_block(&id, "MultiEdit", path, &diff_text)
+            }
+            "Write" => {
+                let path = input.get("file_path").and_then(Value::as_str).unwrap_or("");
+                let content = input.get("content").and_then(Value::as_str).unwrap_or("");
+                let diff_text = content
+                    .lines()
+                    .map(|l| format!("+{l}"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                build_diff_block(&id, "Write", path, &diff_text)
+            }
+            _ => continue,
+        };
+
+        out.push(json!({ "type": "galcode.block", "block": block }));
+    }
+    out
+}
+
+fn simple_diff(old: &str, new: &str) -> String {
+    let mut lines = Vec::new();
+    for line in old.lines() {
+        lines.push(format!("-{line}"));
+    }
+    for line in new.lines() {
+        lines.push(format!("+{line}"));
+    }
+    lines.join("\n")
+}
+
+fn build_diff_block(id: &str, tool: &str, path: &str, diff: &str) -> Value {
+    json!({
+        "id": format!("claude-diff-{id}"),
+        "type": "diff",
+        "tool": tool,
+        "path": path,
+        "diff": diff,
+        "backend": "claude",
+        "suppressLogLine": false
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Stream 客户端辅助
 // ---------------------------------------------------------------------------
 
@@ -629,6 +730,14 @@ pub fn spawn_claude_stream_client(
                 if let Some(next_session_id) = extract_cli_session_id(&event) {
                     if let Ok(mut session) = client.session_id.lock() {
                         *session = Some(next_session_id);
+                    }
+                }
+
+                // 解析 tool_use Edit/MultiEdit/Write，把 file diff 单独 emit 成
+                // galcode.block 给前端 BlockStream 渲染（绿+红-）
+                for diff_event in extract_claude_diff_blocks(&event) {
+                    if let Some(stream_id) = stream_id.as_deref() {
+                        emit_cli_stream_json_event(&app, "claude", stream_id, &diff_event);
                     }
                 }
 
