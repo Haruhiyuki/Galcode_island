@@ -4,8 +4,14 @@
 // 状态条 chip 颜色：installed 绿、loggedIn 绿、未登录黄、未装红、loading 蓝。
 // verify/login/start 之类操作完成后内联显示 toast（成功提示 / 错误信息）。
 
+import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useState } from "react";
 import { useBackendStatus } from "../../hooks/useBackendStatus";
+import {
+  useSettingsStore,
+  type BackendKey,
+  type BackendPrefs,
+} from "../../stores/useSettingsStore";
 
 interface ChipProps {
   ok: boolean | null; // null = unknown / loading
@@ -30,6 +36,67 @@ function StatusChip({ ok, label, warn }: ChipProps): JSX.Element {
       <span>{symbol}</span>
       <span>{label}</span>
     </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 偏好输入面板（model / effort / proxy / binary）
+// ---------------------------------------------------------------------------
+
+interface PrefsEditorProps {
+  backend: BackendKey;
+  /// 哪些字段对该 backend 有意义。OpenCode 没有 model/effort 概念，只显示 binary/proxy。
+  fields: ReadonlyArray<keyof BackendPrefs>;
+}
+
+const FIELD_LABEL: Record<keyof BackendPrefs, string> = {
+  model: "Model",
+  effort: "Effort",
+  proxy: "Proxy",
+  binary: "Binary 路径",
+};
+
+const FIELD_PLACEHOLDER: Record<keyof BackendPrefs, string> = {
+  model: "默认（settings.json / config.toml / env）",
+  effort: "low | medium | high | max",
+  proxy: "http://127.0.0.1:7890 或 socks5://...",
+  binary: "默认（PATH / bundled runtime）",
+};
+
+function PrefsEditor({ backend, fields }: PrefsEditorProps): JSX.Element {
+  const prefs = useSettingsStore((s) => s.backends[backend]);
+  const setBackendPref = useSettingsStore((s) => s.setBackendPref);
+
+  /// onBlur 时一次性同步整个 backend 的偏好给 Rust 端，避免每个字符都 invoke。
+  const sync = useCallback(() => {
+    const current = useSettingsStore.getState().backends[backend];
+    invoke("update_backend_preferences", {
+      backend,
+      model: current.model || null,
+      effort: current.effort || null,
+      proxy: current.proxy || null,
+      binary: current.binary || null,
+    }).catch(console.error);
+  }, [backend]);
+
+  return (
+    <div className="mt-3 grid grid-cols-2 gap-2">
+      {fields.map((field) => (
+        <label key={field} className="flex flex-col gap-1">
+          <span className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
+            {FIELD_LABEL[field]}
+          </span>
+          <input
+            type="text"
+            value={prefs[field]}
+            onChange={(e) => setBackendPref(backend, field, e.target.value)}
+            onBlur={sync}
+            placeholder={FIELD_PLACEHOLDER[field]}
+            className="rounded-md border border-black/5 bg-white/40 px-2 py-1 text-xs text-zinc-800 outline-none transition-all focus:border-sky-400/50 focus:bg-white/70 focus:ring-1 focus:ring-sky-400/15 dark:border-white/5 dark:bg-slate-800/40 dark:text-zinc-100 dark:focus:bg-slate-800/70"
+          />
+        </label>
+      ))}
+    </div>
   );
 }
 
@@ -170,6 +237,7 @@ export function AgentBackendsSection({
             刷新状态
           </button>
         </div>
+        <PrefsEditor backend="claude-code" fields={["model", "effort", "binary", "proxy"]} />
         <Toast toast={toasts.claude ?? null} />
       </BackendCard>
     );
@@ -240,6 +308,7 @@ export function AgentBackendsSection({
             刷新状态
           </button>
         </div>
+        <PrefsEditor backend="codex" fields={["model", "effort", "binary", "proxy"]} />
         <Toast toast={toasts.codex ?? null} />
       </BackendCard>
     );
@@ -305,6 +374,7 @@ export function AgentBackendsSection({
             刷新状态
           </button>
         </div>
+        <PrefsEditor backend="opencode" fields={["binary", "proxy"]} />
         <Toast toast={toasts.opencode ?? null} />
       </BackendCard>
     );

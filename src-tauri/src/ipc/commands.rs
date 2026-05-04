@@ -142,6 +142,20 @@ pub fn update_llm_settings(
     Ok(())
 }
 
+/// 写入某个 backend 的运行时偏好（model / effort / proxy / binary，全部 Option）。
+/// 后端的 launch_*_agent 在每次 turn 启动时都会读这份偏好。
+/// `backend` 取值：`"claude-code" | "codex" | "opencode"`。
+#[tauri::command]
+pub fn update_backend_preferences(
+    backend: String,
+    model: Option<String>,
+    effort: Option<String>,
+    proxy: Option<String>,
+    binary: Option<String>,
+) -> Result<(), String> {
+    crate::agent::preferences::update_backend_preferences(&backend, model, effort, proxy, binary)
+}
+
 #[tauri::command]
 pub fn set_click_through(app: AppHandle, enabled: bool) -> Result<(), String> {
     let w = app

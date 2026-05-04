@@ -194,6 +194,7 @@ pub fn launch_claude_agent(
     tauri::async_runtime::spawn_blocking(move || {
         let llm = load_llm_config();
         let prompt_for_agent = translate_input(&llm, &user_zh);
+        let prefs = crate::agent::preferences::load_backend_preferences("claude-code");
 
         let turn_result = claude_agent::run_claude_stream_turn(
             &app_handle,
@@ -202,10 +203,10 @@ pub fn launch_claude_agent(
             &prompt_for_agent,
             &cwd_owned,
             resume_session_id.as_deref(),
-            None, // model: 走默认（settings.json 或 ANTHROPIC_MODEL）
-            None, // effort
-            None, // binary
-            None, // proxy
+            prefs.model.as_deref(),
+            prefs.effort.as_deref(),
+            prefs.binary.as_deref(),
+            prefs.proxy.as_deref(),
             Some(&stream_id),
         );
 
@@ -285,6 +286,7 @@ pub fn launch_codex_agent(
     tauri::async_runtime::spawn_blocking(move || {
         let llm = load_llm_config();
         let prompt_for_agent = translate_input(&llm, &user_zh);
+        let prefs = crate::agent::preferences::load_backend_preferences("codex");
 
         let turn_result = codex_agent::run_codex_app_server_turn(
             &app_handle,
@@ -294,10 +296,10 @@ pub fn launch_codex_agent(
             resume_thread_id.as_deref(),
             None, // system_prompt
             &prompt_for_agent,
-            None, // model
-            None, // reasoning_effort
-            None, // binary
-            None, // proxy
+            prefs.model.as_deref(),
+            prefs.effort.as_deref(),
+            prefs.binary.as_deref(),
+            prefs.proxy.as_deref(),
             Some(&stream_id),
         );
 
@@ -382,13 +384,15 @@ pub fn launch_opencode_agent(
         .await
         .unwrap_or_else(|_| user_zh.clone());
 
+        let prefs = crate::agent::preferences::load_backend_preferences("opencode");
+
         // 启动（或复用）OpenCode serve 子进程
         if let Err(error) = opencode_agent::opencode_start(
             &app_handle,
             runtime_clone.as_ref(),
             DEFAULT_RUN_ID,
-            None,
-            None,
+            prefs.binary.as_deref(),
+            prefs.proxy.as_deref(),
             None,
             Some(&cwd_owned),
         )

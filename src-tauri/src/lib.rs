@@ -22,7 +22,7 @@ use ipc::commands::{
     codex_login_open, codex_send_prompt, codex_status, codex_verify, get_session_logs,
     opencode_create_session, opencode_send_prompt, opencode_start, opencode_status, opencode_stop,
     respond_permission, select_project_folder, set_click_through, start_agent, stop_agent,
-    translate_only, update_llm_settings,
+    translate_only, update_backend_preferences, update_llm_settings,
 };
 use std::sync::Arc;
 
@@ -86,6 +86,7 @@ pub fn run() {
             translate_only,
             set_click_through,
             update_llm_settings,
+            update_backend_preferences,
             // Claude Code
             claude_status,
             claude_models,

@@ -18,12 +18,26 @@ function App(): JSX.Element {
 
   useEffect(() => {
     const state = useSettingsStore.getState();
+
+    // 启动时把 persist 出来的 LLM + 三个 backend 偏好同步给 Rust 端的内存单例。
+    // Rust 端 OnceLock<Mutex<...>> 进程重启就空——前端 zustand persist 是真相之源。
     invoke("update_llm_settings", {
       baseUrl: state.apiBaseUrl,
       apiKey: state.apiKey,
       nickname: state.nickname,
       systemPrompt: state.systemPrompt,
     }).catch(console.error);
+
+    for (const backend of ["claude-code", "codex", "opencode"] as const) {
+      const prefs = state.backends[backend];
+      invoke("update_backend_preferences", {
+        backend,
+        model: prefs.model || null,
+        effort: prefs.effort || null,
+        proxy: prefs.proxy || null,
+        binary: prefs.binary || null,
+      }).catch(console.error);
+    }
   }, []);
 
   const currentScreen = useMemo(() => {
