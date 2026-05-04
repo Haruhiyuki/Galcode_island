@@ -47,7 +47,10 @@ impl Default for AppState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let _ = env_logger::try_init();
+    // 默认开 INFO 级别，dev 不需要 RUST_LOG=info 也能看到诊断日志。
+    // 用户可以通过 RUST_LOG=debug 进一步加详细。
+    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .try_init();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())

@@ -21,6 +21,8 @@ export function InputBubble(): JSX.Element {
   const setUiState = useAppStore((s) => s.setUiState);
   const setMode = useAppStore((s) => s.setMode);
   const setAgentStatus = useAppStore((s) => s.setAgentStatus);
+  const setSessionId = useAppStore((s) => s.setSessionId);
+  const setPercent = useAppStore((s) => s.setPercent);
   const addLogEntry = useAppStore((s) => s.addLogEntry);
 
   const [greeting, setGreeting] = useState("");
@@ -55,14 +57,23 @@ export function InputBubble(): JSX.Element {
     if (!task.trim()) return;
     const selectedAgent = useAppStore.getState().selectedAgent;
     try {
+      // 先清掉上一轮 sessionId 再 invoke——avoid 上一轮的 session-complete
+      // 路由到本轮事件处理
+      setSessionId(null);
+      setPercent(0);
       setUiState("running");
       setMode("working");
       setAgentStatus("running");
-      await invoke("start_agent", {
+      const res = await invoke<{ sessionId?: string }>("start_agent", {
         userInputZh: task,
         cwd: projectPath || ".",
         agent: selectedAgent,
       });
+      // 把后端返回的 sessionId 写回 store，让 useAgentIPC 的 forSession 能匹配
+      // 后续 status-changed / session-complete 事件
+      if (res?.sessionId) {
+        setSessionId(res.sessionId);
+      }
     } catch (err) {
       addLogEntry({
         timestamp: Date.now(),

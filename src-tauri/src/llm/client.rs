@@ -139,7 +139,13 @@ struct RespMessage {
     content: String,
 }
 
-fn chat_completion(cfg: &LlmConfig, base_system: &str, user: &str) -> Result<String, String> {
+fn chat_completion(
+    cfg: &LlmConfig,
+    base_system: &str,
+    user: &str,
+    thinking_override: Option<bool>,
+) -> Result<String, String> {
+    let effective_thinking = thinking_override.unwrap_or(cfg.thinking);
     let client = http_client()?;
     let url = format!("{}/chat/completions", cfg.base_url);
 
@@ -174,17 +180,34 @@ fn chat_completion(cfg: &LlmConfig, base_system: &str, user: &str) -> Result<Str
             },
         ],
         temperature: 0.3,
-        enable_thinking: cfg.thinking,
+        enable_thinking: effective_thinking,
     };
+    eprintln!(
+        "[llm] POST {} model={} thinking={} prompt_chars={}",
+        url,
+        cfg.model,
+        effective_thinking,
+        user.chars().count()
+    );
+    let started = std::time::Instant::now();
     let res = client
         .post(&url)
         .header("Authorization", format!("Bearer {}", cfg.api_key))
         .header("Content-Type", "application/json")
         .json(&body)
         .send()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            eprintln!("[llm] send error: {}", e);
+            e.to_string()
+        })?;
     let status = res.status();
     let txt = res.text().map_err(|e| e.to_string())?;
+    eprintln!(
+        "[llm] response {} in {}ms (body_len={})",
+        status,
+        started.elapsed().as_millis(),
+        txt.len()
+    );
     if !status.is_success() {
         return Err(format!("LLM HTTP {}: {}", status, txt));
     }
@@ -199,11 +222,13 @@ fn chat_completion(cfg: &LlmConfig, base_system: &str, user: &str) -> Result<Str
 }
 
 pub fn translate_zh_to_en(cfg: &LlmConfig, text: &str) -> Result<String, String> {
-    chat_completion(cfg, prompt::translate_zh_to_en_system(), text)
+    // 翻译是机械任务，强制关思考——否则 DeepSeek 等会把简单翻译当 reasoning 跑
+    // 几十秒，整个 launch 卡住没反馈。
+    chat_completion(cfg, prompt::translate_zh_to_en_system(), text, Some(false))
 }
 
 pub fn translate_en_to_zh(cfg: &LlmConfig, text: &str) -> Result<String, String> {
-    chat_completion(cfg, prompt::translate_en_to_zh_system(), text)
+    chat_completion(cfg, prompt::translate_en_to_zh_system(), text, Some(false))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -224,7 +249,7 @@ pub fn generate_agent_summary(
         "【用户原始需求】\n{}\n\n【Agent 输出】\n{}",
         user_zh, agent_output_zh
     );
-    let text = chat_completion(cfg, prompt::haruhi_system_prompt(), &user)?;
+    let text = chat_completion(cfg, prompt::haruhi_system_prompt(), &user, None)?;
     let cleaned = text
         .trim()
         .trim_start_matches("```json")

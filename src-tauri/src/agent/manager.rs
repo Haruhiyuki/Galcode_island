@@ -192,10 +192,31 @@ pub fn launch_claude_agent(
     let cwd_owned = cwd.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
+        eprintln!("[claude] >>> turn start sid={}", sid);
         let llm = load_llm_config();
+        eprintln!(
+            "[claude] llm config: {}",
+            if llm.is_some() { "ok" } else { "MISSING (无 API Key, 跳过翻译)" }
+        );
+        if llm.is_some() {
+            emit_progress(&app_handle, &sid, AgentStatus::Processing, "翻译输入到英文…", 10.0);
+        }
+        eprintln!("[claude] step: translate input");
         let prompt_for_agent = translate_input(&llm, &user_zh);
-        let prefs = crate::agent::preferences::load_backend_preferences("claude-code");
+        eprintln!(
+            "[claude] step: translate done, prompt_len={} (preview: {:?})",
+            prompt_for_agent.len(),
+            prompt_for_agent.chars().take(80).collect::<String>()
+        );
 
+        emit_progress(&app_handle, &sid, AgentStatus::Starting, "启动 Claude Code…", 30.0);
+        let prefs = crate::agent::preferences::load_backend_preferences("claude-code");
+        eprintln!(
+            "[claude] step: spawn turn (binary={:?} model={:?} effort={:?} proxy={:?})",
+            prefs.binary, prefs.model, prefs.effort, prefs.proxy
+        );
+
+        emit_progress(&app_handle, &sid, AgentStatus::Processing, "Agent 工作中…", 50.0);
         let turn_result = claude_agent::run_claude_stream_turn(
             &app_handle,
             runtime_clone.as_ref(),
@@ -212,11 +233,17 @@ pub fn launch_claude_agent(
 
         match turn_result {
             Ok((next_session_id, output_en)) => {
+                eprintln!(
+                    "[claude] <<< turn OK, output_len={} session_id={:?}",
+                    output_en.len(),
+                    next_session_id
+                );
                 if let Some(next_sid) = next_session_id {
                     if let Ok(mut mgr) = state_clone.manager.lock() {
                         mgr.remember_session("claude-code", &cwd_owned, &next_sid);
                     }
                 }
+                emit_progress(&app_handle, &sid, AgentStatus::Processing, "翻译输出 + 总结…", 80.0);
                 finalize_session(
                     &app_handle,
                     &state_clone,
@@ -227,6 +254,7 @@ pub fn launch_claude_agent(
                 );
             }
             Err(error) => {
+                eprintln!("[claude] <<< turn FAILED: {}", error);
                 fail_session(&app_handle, &state_clone, &sid, &error, "CLAUDE_TURN_FAILED");
             }
         }
@@ -284,17 +312,34 @@ pub fn launch_codex_agent(
     let cwd_owned = cwd.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
+        eprintln!("[codex] >>> turn start sid={}", sid);
         let llm = load_llm_config();
+        eprintln!(
+            "[codex] llm config: {}",
+            if llm.is_some() { "ok" } else { "MISSING" }
+        );
+        if llm.is_some() {
+            emit_progress(&app_handle, &sid, AgentStatus::Processing, "翻译输入到英文…", 10.0);
+        }
+        eprintln!("[codex] step: translate input");
         let prompt_for_agent = translate_input(&llm, &user_zh);
-        let prefs = crate::agent::preferences::load_backend_preferences("codex");
+        eprintln!("[codex] step: translate done, prompt_len={}", prompt_for_agent.len());
 
+        emit_progress(&app_handle, &sid, AgentStatus::Starting, "启动 Codex App Server…", 30.0);
+        let prefs = crate::agent::preferences::load_backend_preferences("codex");
+        eprintln!(
+            "[codex] step: spawn turn (binary={:?} model={:?})",
+            prefs.binary, prefs.model
+        );
+
+        emit_progress(&app_handle, &sid, AgentStatus::Processing, "Agent 工作中…", 50.0);
         let turn_result = codex_agent::run_codex_app_server_turn(
             &app_handle,
             runtime_clone.as_ref(),
             DEFAULT_RUN_ID,
             &cwd_owned,
             resume_thread_id.as_deref(),
-            None, // system_prompt
+            None,
             &prompt_for_agent,
             prefs.model.as_deref(),
             prefs.effort.as_deref(),
@@ -305,9 +350,15 @@ pub fn launch_codex_agent(
 
         match turn_result {
             Ok((thread_id, output_en)) => {
+                eprintln!(
+                    "[codex] <<< turn OK, output_len={} thread_id={}",
+                    output_en.len(),
+                    thread_id
+                );
                 if let Ok(mut mgr) = state_clone.manager.lock() {
                     mgr.remember_session("codex", &cwd_owned, &thread_id);
                 }
+                emit_progress(&app_handle, &sid, AgentStatus::Processing, "翻译输出 + 总结…", 80.0);
                 finalize_session(
                     &app_handle,
                     &state_clone,
@@ -318,6 +369,7 @@ pub fn launch_codex_agent(
                 );
             }
             Err(error) => {
+                eprintln!("[codex] <<< turn FAILED: {}", error);
                 fail_session(&app_handle, &state_clone, &sid, &error, "CODEX_TURN_FAILED");
             }
         }
@@ -375,7 +427,15 @@ pub fn launch_opencode_agent(
     let cwd_owned = cwd.clone();
 
     tauri::async_runtime::spawn(async move {
+        eprintln!("[opencode] >>> turn start sid={}", sid);
         let llm = load_llm_config();
+        eprintln!(
+            "[opencode] llm config: {}",
+            if llm.is_some() { "ok" } else { "MISSING" }
+        );
+        if llm.is_some() {
+            emit_progress(&app_handle, &sid, AgentStatus::Processing, "翻译输入到英文…", 10.0);
+        }
         let llm_for_blocking = llm.clone();
         let user_zh_for_blocking = user_zh.clone();
         let prompt_for_agent = tauri::async_runtime::spawn_blocking(move || {
@@ -383,10 +443,12 @@ pub fn launch_opencode_agent(
         })
         .await
         .unwrap_or_else(|_| user_zh.clone());
+        eprintln!("[opencode] step: translate done, prompt_len={}", prompt_for_agent.len());
 
+        emit_progress(&app_handle, &sid, AgentStatus::Starting, "启动 OpenCode serve…", 25.0);
+        eprintln!("[opencode] step: opencode_start");
         let prefs = crate::agent::preferences::load_backend_preferences("opencode");
 
-        // 启动（或复用）OpenCode serve 子进程
         if let Err(error) = opencode_agent::opencode_start(
             &app_handle,
             runtime_clone.as_ref(),
@@ -398,6 +460,7 @@ pub fn launch_opencode_agent(
         )
         .await
         {
+            eprintln!("[opencode] <<< opencode_start FAILED: {}", error);
             fail_session(
                 &app_handle,
                 &state_clone,
@@ -407,8 +470,9 @@ pub fn launch_opencode_agent(
             );
             return;
         }
+        eprintln!("[opencode] step: opencode_start ok");
 
-        // 复用 session_id 还是新建一个
+        emit_progress(&app_handle, &sid, AgentStatus::Processing, "创建会话…", 40.0);
         let session_for_turn = match resume_session_id {
             Some(existing) => existing,
             None => match opencode_agent::opencode_create_session(
@@ -422,6 +486,7 @@ pub fn launch_opencode_agent(
             {
                 Ok(id) => id,
                 Err(error) => {
+                    eprintln!("[opencode] <<< create_session FAILED: {}", error);
                     fail_session(
                         &app_handle,
                         &state_clone,
@@ -434,6 +499,7 @@ pub fn launch_opencode_agent(
             },
         };
 
+        emit_progress(&app_handle, &sid, AgentStatus::Processing, "Agent 工作中…", 55.0);
         let turn_result = opencode_agent::run_opencode_turn(
             &app_handle,
             runtime_clone.as_ref(),
@@ -448,9 +514,11 @@ pub fn launch_opencode_agent(
 
         match turn_result {
             Ok((output_en, _raw)) => {
+                eprintln!("[opencode] <<< turn OK, output_len={}", output_en.len());
                 if let Ok(mut mgr) = state_clone.manager.lock() {
                     mgr.remember_session("opencode", &cwd_owned, &session_for_turn);
                 }
+                emit_progress(&app_handle, &sid, AgentStatus::Processing, "翻译输出 + 总结…", 80.0);
                 let app_for_finalize = app_handle.clone();
                 let state_for_finalize = Arc::clone(&state_clone);
                 let sid_for_finalize = sid.clone();
@@ -468,6 +536,7 @@ pub fn launch_opencode_agent(
                 .await;
             }
             Err(error) => {
+                eprintln!("[opencode] <<< turn FAILED: {}", error);
                 fail_session(
                     &app_handle,
                     &state_clone,
@@ -614,6 +683,25 @@ fn emit_status_running(app: &AppHandle, session_id: &str, description: &str) {
             tool_name: None,
             tool_description: Some(description.to_string()),
             percent: Some(0.0),
+        },
+    );
+}
+
+fn emit_progress(
+    app: &AppHandle,
+    session_id: &str,
+    status: AgentStatus,
+    description: &str,
+    percent: f64,
+) {
+    let _ = app.emit(
+        "agent://status-changed",
+        events::StatusChangedPayload {
+            session_id: session_id.to_string(),
+            status,
+            tool_name: None,
+            tool_description: Some(description.to_string()),
+            percent: Some(percent),
         },
     );
 }

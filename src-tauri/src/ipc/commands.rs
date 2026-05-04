@@ -41,6 +41,11 @@ pub fn start_agent(
         .clone()
         .unwrap_or_else(|| "claude-code".to_string());
 
+    eprintln!(
+        "[galcode] start_agent: agent={agent_type} cwd={cwd} input_len={}",
+        user_input_zh.len()
+    );
+
     let prev = {
         let mgr = state.manager.lock().map_err(|e| e.to_string())?;
         mgr.active_session.clone()
@@ -54,7 +59,7 @@ pub fn start_agent(
         );
     }
 
-    match agent_type.as_str() {
+    let result = match agent_type.as_str() {
         "claude-code" => manager::launch_claude_agent(
             app,
             Arc::clone(state.inner()),
@@ -77,7 +82,12 @@ pub fn start_agent(
             user_input_zh,
         ),
         _ => Err(format!("暂不支持的 agent 类型: {}", agent_type)),
+    };
+    match &result {
+        Ok(r) => eprintln!("[galcode] start_agent ok, sid={}", r.session_id),
+        Err(e) => eprintln!("[galcode] start_agent FAILED: {}", e),
     }
+    result
 }
 
 /// `session_id` 省略时停止当前 `active_session`。

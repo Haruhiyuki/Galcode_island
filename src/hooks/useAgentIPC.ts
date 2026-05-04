@@ -33,9 +33,18 @@ export function useAgentIPC(): void {
   useEffect(() => {
     const unsubs: UnlistenFn[] = [];
 
+    /// 宽松匹配：
+    /// - store 已 lock sid → 事件 sid 必须匹配（多会话隔离）
+    /// - store 还没 sid（invoke 同步阶段后端就 emit 了 status-changed） → 接受
+    ///   并把事件的 sid 写回 store，让后续事件能匹配
+    /// 这样能避免"启动时第一个事件丢弃 → percent 卡 0%"的竞态。
     const forSession = (sid: string | undefined, fn: () => void) => {
       const current = sessionRef.current;
-      if (!current || sid !== current) return;
+      if (current && sid && sid !== current) return;
+      if (!current && sid) {
+        storeRef.current.setSessionId(sid);
+        sessionRef.current = sid;
+      }
       fn();
     };
 
