@@ -14,7 +14,8 @@
     "check:rust": "cd src-tauri && cargo check",
     "fmt:rust": "cd src-tauri && cargo fmt",
     "lint:rust": "cd src-tauri && cargo clippy --all-targets -- -D warnings",
-    "clean": "rm -rf dist src-tauri/target"
+    "prepare:runtime": "node scripts/prepare-runtime.mjs",
+    "clean": "rm -rf dist src-tauri/target src-tauri/resources/runtime"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.2.4",
