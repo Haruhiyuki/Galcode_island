@@ -18,7 +18,13 @@ claude auth login   # 以及 codex login / opencode auth login（按需）
 npm run dev
 ```
 
-如果 cargo 报 `requires rustc 1.88` 错，说明 PATH 上的 cargo 是 Homebrew 的旧版。`rust-toolchain.toml` 已锁 stable，确保用 rustup（`~/.cargo/bin/cargo`）。
+如果 cargo 报 `requires rustc 1.88` 错，说明 PATH 上的 cargo 是 Homebrew 的旧版（`rust-toolchain.toml` 只对 rustup 的 cargo shim 生效）。
+
+`package.json` 里的 `dev` / `build` / `check:rust` 等命令已经预置了 `PATH="$HOME/.cargo/bin:$PATH"`，正常 `npm run dev` 不需要额外操作。如果你直接调 `cargo` 也想稳，建议在 `~/.zshrc` 加：
+
+```bash
+export PATH="$HOME/.cargo/bin:$PATH"
+```
 
 ## 常用命令
 
