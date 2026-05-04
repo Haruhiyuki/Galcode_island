@@ -17,6 +17,7 @@ function AgentSelector(): JSX.Element {
   const options: { value: AgentType; label: string }[] = [
     { value: "claude-code", label: "Claude Code" },
     { value: "opencode", label: "OpenCode" },
+    { value: "codex", label: "Codex" },
   ];
   const selectedLabel = options.find((o) => o.value === selectedAgent)?.label ?? "Claude Code";
 

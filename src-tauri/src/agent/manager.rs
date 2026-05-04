@@ -1,30 +1,50 @@
-use super::config::{preset_demo, preset_opencode};
-use super::launcher::{read_new_lines, resolve_demo_script, spawn_demo_process, spawn_opencode_terminal};
+// Agent 会话管理器：start/stop/总结/翻译/IPC 事件聚合层。
+//
+// 设计：
+//   - 三个 backend (Claude / OpenCode / Codex) 都通过对应 agent::xxx 模块完成 CLI 通信
+//   - 本模块负责把每个 turn 套到 LLM 翻译/总结管线里：
+//       中文 prompt → translate_zh_to_en → backend turn → 拿到英文输出
+//       英文输出 → translate_en_to_zh → 中文 → generate_agent_summary → mode/emotion/options
+//   - SessionSnapshot 状态由 IPC events 透传给前端宠物气泡
+//   - 会话续接：每个 backend 自动捕获 session_id 存到 RuntimeState 里供下次 turn 复用
+//
+// 老 demo 路径保留（python scripts/demo_agent.py），用于不依赖外部 CLI 的烟测。
+
+use super::config::preset_demo;
+use super::launcher::{resolve_demo_script, spawn_demo_process};
+use crate::agent::runtime::{ClaudeStreamClient, RuntimeState, DEFAULT_RUN_ID};
+use crate::agent::{claude as claude_agent, codex as codex_agent, opencode as opencode_agent};
 use crate::hook::event::HookEvent;
 use crate::ipc::events::{self, SessionCompletePayload};
 use crate::llm::{
-    generate_agent_summary, load_llm_config, translate_en_to_zh,
-    translate_zh_to_en, LlmConfig,
+    generate_agent_summary, load_llm_config, translate_en_to_zh, translate_zh_to_en, LlmConfig,
 };
 use crate::session::snapshot::SessionSnapshot;
 use crate::session::state::{reduce_event, AgentStatus};
 use crate::AppState;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tauri::{AppHandle, Emitter};
+
+// ---------------------------------------------------------------------------
+// 会话与管理器
+// ---------------------------------------------------------------------------
 
 pub struct AgentSession {
     pub snapshot: Arc<Mutex<SessionSnapshot>>,
+    /// 仅 demo 路径用 — 其它 backend 的 client 在 RuntimeState 里管理。
     pub child: Arc<Mutex<Option<std::process::Child>>>,
     pub logs: Arc<Mutex<Vec<String>>>,
     pub created_at: Instant,
+    /// 用于 cli-output 事件路由（参考项目里前端按 stream_id 把流式日志分发到正确 tab）。
+    pub stream_id: String,
 }
 
 impl AgentSession {
     pub fn new(session_id: String, agent_type: String, cwd: Option<String>) -> Self {
+        let stream_id = format!("stream-{}", session_id);
         Self {
             snapshot: Arc::new(Mutex::new(SessionSnapshot::new(
                 session_id,
@@ -35,6 +55,7 @@ impl AgentSession {
             child: Arc::new(Mutex::new(None)),
             logs: Arc::new(Mutex::new(Vec::new())),
             created_at: Instant::now(),
+            stream_id,
         }
     }
 }
@@ -42,8 +63,11 @@ impl AgentSession {
 pub struct AgentManager {
     pub sessions: HashMap<String, AgentSession>,
     pending_permission: HashMap<(String, String), ()>,
-    /// Last demo session started via `start_agent` / `launch_agent` (for plan-compat `stop_agent` without id).
+    /// 当前活动会话（兼容老的无参 stop_agent）。命名沿用 demo 时代，但承载所有 backend。
     pub active_demo_session: Option<String>,
+    /// 会话续接缓存：(agent_type, cwd) → 上次的 session_id / thread_id。
+    /// 下次同 agent_type+cwd 提交时自动 resume，让对话有上下文延续。
+    pub last_session_per_context: HashMap<(String, String), String>,
 }
 
 impl AgentManager {
@@ -52,6 +76,7 @@ impl AgentManager {
             sessions: HashMap::new(),
             pending_permission: HashMap::new(),
             active_demo_session: None,
+            last_session_per_context: HashMap::new(),
         }
     }
 
@@ -67,7 +92,11 @@ impl AgentManager {
             .sessions
             .iter()
             .filter(|(_, s)| {
-                let st = s.snapshot.lock().map(|g| g.status).unwrap_or(AgentStatus::Idle);
+                let st = s
+                    .snapshot
+                    .lock()
+                    .map(|g| g.status)
+                    .unwrap_or(AgentStatus::Idle);
                 matches!(st, AgentStatus::Completed | AgentStatus::Error)
                     && now.duration_since(s.created_at) > max_age
             })
@@ -96,7 +125,38 @@ impl AgentManager {
         );
         Ok(())
     }
+
+    fn remember_session(&mut self, agent_type: &str, cwd: &str, session_id: &str) {
+        if session_id.trim().is_empty() {
+            return;
+        }
+        self.last_session_per_context.insert(
+            (agent_type.to_string(), cwd.to_string()),
+            session_id.to_string(),
+        );
+    }
+
+    fn last_session_for(&self, agent_type: &str, cwd: &str) -> Option<String> {
+        self.last_session_per_context
+            .get(&(agent_type.to_string(), cwd.to_string()))
+            .cloned()
+    }
 }
+
+// ---------------------------------------------------------------------------
+// 公共结果类型
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchResult {
+    pub session_id: String,
+    pub status: AgentStatus,
+}
+
+// ---------------------------------------------------------------------------
+// Demo Agent (老 python 脚本，保留作为不依赖外部 CLI 的烟测)
+// ---------------------------------------------------------------------------
 
 pub fn launch_demo_agent(
     app: AppHandle,
@@ -115,7 +175,7 @@ pub fn launch_demo_agent(
         None => trimmed.clone(),
     };
 
-    let cwd_path = PathBuf::from(&cwd);
+    let cwd_path = std::path::PathBuf::from(&cwd);
     let script = resolve_demo_script();
     let cfg = preset_demo();
 
@@ -160,14 +220,7 @@ pub fn launch_demo_agent(
     let state_clone = Arc::clone(&state);
     let sid = session_id.clone();
     std::thread::spawn(move || {
-        run_stdout_loop(
-            app_handle,
-            state_clone,
-            sid.clone(),
-            stdout,
-            trimmed,
-            llm,
-        );
+        run_stdout_loop(app_handle, state_clone, sid.clone(), stdout, trimmed, llm);
     });
 
     Ok(LaunchResult {
@@ -176,9 +229,14 @@ pub fn launch_demo_agent(
     })
 }
 
-pub fn launch_opencode_agent(
+// ---------------------------------------------------------------------------
+// Claude Code Agent
+// ---------------------------------------------------------------------------
+
+pub fn launch_claude_agent(
     app: AppHandle,
     state: Arc<AppState>,
+    runtime_state: Arc<RuntimeState>,
     cwd: String,
     task_zh: String,
 ) -> Result<LaunchResult, String> {
@@ -187,31 +245,19 @@ pub fn launch_opencode_agent(
         return Err("任务内容不能为空".into());
     }
 
-    eprintln!("[galcode] launch_opencode_agent: cwd={}, task={}", cwd, trimmed);
-
-    let llm = load_llm_config();
-    let task_for_agent = match &llm {
-        Some(cfg) => translate_zh_to_en(cfg, &trimmed).unwrap_or_else(|_| trimmed.clone()),
-        None => trimmed.clone(),
-    };
-
-    eprintln!("[galcode] task_for_agent={}", task_for_agent);
-
-    let cwd_path = PathBuf::from(&cwd);
-    let cfg = preset_opencode();
-
-    // Spawn the agent in a visible terminal; output is tee'd to a temp file
-    eprintln!("[galcode] calling spawn_opencode_terminal...");
-    let launch = spawn_opencode_terminal(&cfg, &cwd_path, &task_for_agent)?;
-
     let session_id = uuid::Uuid::new_v4().to_string();
-    let agent_type = "opencode".to_string();
-    let sess = AgentSession::new(session_id.clone(), agent_type, Some(cwd.clone()));
+    let sess = AgentSession::new(session_id.clone(), "claude-code".into(), Some(cwd.clone()));
+    let stream_id = sess.stream_id.clone();
     {
         let mut sn = sess.snapshot.lock().map_err(|e| e.to_string())?;
         sn.last_user_prompt = Some(trimmed.clone());
         sn.status = AgentStatus::Running;
     }
+
+    let resume_session_id = {
+        let mgr = state.manager.lock().map_err(|e| e.to_string())?;
+        mgr.last_session_for("claude-code", &cwd)
+    };
 
     {
         let mut mgr = state.manager.lock().map_err(|e| e.to_string())?;
@@ -219,33 +265,53 @@ pub fn launch_opencode_agent(
         mgr.sessions.insert(session_id.clone(), sess);
     }
 
-    let _ = app.emit(
-        "agent://status-changed",
-        events::StatusChangedPayload {
-            session_id: session_id.clone(),
-            status: AgentStatus::Running,
-            tool_name: None,
-            tool_description: Some("OpenCode agent started in terminal".into()),
-            percent: Some(0.0),
-        },
-    );
+    emit_status_running(&app, &session_id, "Claude Code starting");
 
     let app_handle = app.clone();
     let state_clone = Arc::clone(&state);
+    let runtime_clone = Arc::clone(&runtime_state);
     let sid = session_id.clone();
-    let output_file = launch.output_file.clone();
-    let script_file = launch.script_file.clone();
+    let user_zh = trimmed.clone();
+    let cwd_owned = cwd.clone();
 
-    std::thread::spawn(move || {
-        run_file_monitor(
-            app_handle,
-            state_clone,
-            sid.clone(),
-            output_file,
-            script_file,
-            trimmed,
-            llm,
+    tauri::async_runtime::spawn_blocking(move || {
+        let llm = load_llm_config();
+        let prompt_for_agent = translate_input(&llm, &user_zh);
+
+        let turn_result = claude_agent::run_claude_stream_turn(
+            &app_handle,
+            runtime_clone.as_ref(),
+            DEFAULT_RUN_ID,
+            &prompt_for_agent,
+            &cwd_owned,
+            resume_session_id.as_deref(),
+            None, // model: 走默认（settings.json 或 ANTHROPIC_MODEL）
+            None, // effort
+            None, // binary
+            None, // proxy
+            Some(&stream_id),
         );
+
+        match turn_result {
+            Ok((next_session_id, output_en)) => {
+                if let Some(next_sid) = next_session_id {
+                    if let Ok(mut mgr) = state_clone.manager.lock() {
+                        mgr.remember_session("claude-code", &cwd_owned, &next_sid);
+                    }
+                }
+                finalize_session(
+                    &app_handle,
+                    &state_clone,
+                    &sid,
+                    &user_zh,
+                    output_en,
+                    llm.as_ref(),
+                );
+            }
+            Err(error) => {
+                fail_session(&app_handle, &state_clone, &sid, &error, "CLAUDE_TURN_FAILED");
+            }
+        }
     });
 
     Ok(LaunchResult {
@@ -254,12 +320,401 @@ pub fn launch_opencode_agent(
     })
 }
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LaunchResult {
-    pub session_id: String,
-    pub status: AgentStatus,
+// ---------------------------------------------------------------------------
+// Codex Agent
+// ---------------------------------------------------------------------------
+
+pub fn launch_codex_agent(
+    app: AppHandle,
+    state: Arc<AppState>,
+    runtime_state: Arc<RuntimeState>,
+    cwd: String,
+    task_zh: String,
+) -> Result<LaunchResult, String> {
+    let trimmed = task_zh.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("任务内容不能为空".into());
+    }
+
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let sess = AgentSession::new(session_id.clone(), "codex".into(), Some(cwd.clone()));
+    let stream_id = sess.stream_id.clone();
+    {
+        let mut sn = sess.snapshot.lock().map_err(|e| e.to_string())?;
+        sn.last_user_prompt = Some(trimmed.clone());
+        sn.status = AgentStatus::Running;
+    }
+
+    let resume_thread_id = {
+        let mgr = state.manager.lock().map_err(|e| e.to_string())?;
+        mgr.last_session_for("codex", &cwd)
+    };
+
+    {
+        let mut mgr = state.manager.lock().map_err(|e| e.to_string())?;
+        mgr.active_demo_session = Some(session_id.clone());
+        mgr.sessions.insert(session_id.clone(), sess);
+    }
+
+    emit_status_running(&app, &session_id, "Codex App Server starting");
+
+    let app_handle = app.clone();
+    let state_clone = Arc::clone(&state);
+    let runtime_clone = Arc::clone(&runtime_state);
+    let sid = session_id.clone();
+    let user_zh = trimmed.clone();
+    let cwd_owned = cwd.clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let llm = load_llm_config();
+        let prompt_for_agent = translate_input(&llm, &user_zh);
+
+        let turn_result = codex_agent::run_codex_app_server_turn(
+            &app_handle,
+            runtime_clone.as_ref(),
+            DEFAULT_RUN_ID,
+            &cwd_owned,
+            resume_thread_id.as_deref(),
+            None, // system_prompt
+            &prompt_for_agent,
+            None, // model
+            None, // reasoning_effort
+            None, // binary
+            None, // proxy
+            Some(&stream_id),
+        );
+
+        match turn_result {
+            Ok((thread_id, output_en)) => {
+                if let Ok(mut mgr) = state_clone.manager.lock() {
+                    mgr.remember_session("codex", &cwd_owned, &thread_id);
+                }
+                finalize_session(
+                    &app_handle,
+                    &state_clone,
+                    &sid,
+                    &user_zh,
+                    output_en,
+                    llm.as_ref(),
+                );
+            }
+            Err(error) => {
+                fail_session(&app_handle, &state_clone, &sid, &error, "CODEX_TURN_FAILED");
+            }
+        }
+    });
+
+    Ok(LaunchResult {
+        session_id,
+        status: AgentStatus::Running,
+    })
 }
+
+// ---------------------------------------------------------------------------
+// OpenCode Agent
+// ---------------------------------------------------------------------------
+
+pub fn launch_opencode_agent(
+    app: AppHandle,
+    state: Arc<AppState>,
+    runtime_state: Arc<RuntimeState>,
+    cwd: String,
+    task_zh: String,
+) -> Result<LaunchResult, String> {
+    let trimmed = task_zh.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("任务内容不能为空".into());
+    }
+
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let sess = AgentSession::new(session_id.clone(), "opencode".into(), Some(cwd.clone()));
+    let stream_id = sess.stream_id.clone();
+    {
+        let mut sn = sess.snapshot.lock().map_err(|e| e.to_string())?;
+        sn.last_user_prompt = Some(trimmed.clone());
+        sn.status = AgentStatus::Running;
+    }
+
+    let resume_session_id = {
+        let mgr = state.manager.lock().map_err(|e| e.to_string())?;
+        mgr.last_session_for("opencode", &cwd)
+    };
+
+    {
+        let mut mgr = state.manager.lock().map_err(|e| e.to_string())?;
+        mgr.active_demo_session = Some(session_id.clone());
+        mgr.sessions.insert(session_id.clone(), sess);
+    }
+
+    emit_status_running(&app, &session_id, "OpenCode server starting");
+
+    let app_handle = app.clone();
+    let state_clone = Arc::clone(&state);
+    let runtime_clone = Arc::clone(&runtime_state);
+    let sid = session_id.clone();
+    let user_zh = trimmed.clone();
+    let cwd_owned = cwd.clone();
+
+    tauri::async_runtime::spawn(async move {
+        let llm = load_llm_config();
+        let llm_for_blocking = llm.clone();
+        let user_zh_for_blocking = user_zh.clone();
+        let prompt_for_agent = tauri::async_runtime::spawn_blocking(move || {
+            translate_input(&llm_for_blocking, &user_zh_for_blocking)
+        })
+        .await
+        .unwrap_or_else(|_| user_zh.clone());
+
+        // 启动（或复用）OpenCode serve 子进程
+        if let Err(error) = opencode_agent::opencode_start(
+            &app_handle,
+            runtime_clone.as_ref(),
+            DEFAULT_RUN_ID,
+            None,
+            None,
+            None,
+            Some(&cwd_owned),
+        )
+        .await
+        {
+            fail_session(
+                &app_handle,
+                &state_clone,
+                &sid,
+                &error,
+                "OPENCODE_START_FAILED",
+            );
+            return;
+        }
+
+        // 复用 session_id 还是新建一个
+        let session_for_turn = match resume_session_id {
+            Some(existing) => existing,
+            None => match opencode_agent::opencode_create_session(
+                &app_handle,
+                runtime_clone.as_ref(),
+                DEFAULT_RUN_ID,
+                None,
+                Some(&cwd_owned),
+            )
+            .await
+            {
+                Ok(id) => id,
+                Err(error) => {
+                    fail_session(
+                        &app_handle,
+                        &state_clone,
+                        &sid,
+                        &error,
+                        "OPENCODE_SESSION_FAILED",
+                    );
+                    return;
+                }
+            },
+        };
+
+        let turn_result = opencode_agent::run_opencode_turn(
+            &app_handle,
+            runtime_clone.as_ref(),
+            DEFAULT_RUN_ID,
+            &session_for_turn,
+            &prompt_for_agent,
+            None,
+            Some(&cwd_owned),
+            Some(&stream_id),
+        )
+        .await;
+
+        match turn_result {
+            Ok((output_en, _raw)) => {
+                if let Ok(mut mgr) = state_clone.manager.lock() {
+                    mgr.remember_session("opencode", &cwd_owned, &session_for_turn);
+                }
+                let app_for_finalize = app_handle.clone();
+                let state_for_finalize = Arc::clone(&state_clone);
+                let sid_for_finalize = sid.clone();
+                let user_zh_for_finalize = user_zh.clone();
+                let _ = tauri::async_runtime::spawn_blocking(move || {
+                    finalize_session(
+                        &app_for_finalize,
+                        &state_for_finalize,
+                        &sid_for_finalize,
+                        &user_zh_for_finalize,
+                        output_en,
+                        llm.as_ref(),
+                    );
+                })
+                .await;
+            }
+            Err(error) => {
+                fail_session(
+                    &app_handle,
+                    &state_clone,
+                    &sid,
+                    &error,
+                    "OPENCODE_TURN_FAILED",
+                );
+            }
+        }
+    });
+
+    Ok(LaunchResult {
+        session_id,
+        status: AgentStatus::Running,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// LLM 翻译/总结管线（输入翻译 + 输出翻译 + summary 生成）
+// ---------------------------------------------------------------------------
+
+fn translate_input(llm: &Option<LlmConfig>, zh: &str) -> String {
+    match llm {
+        Some(cfg) => translate_zh_to_en(cfg, zh).unwrap_or_else(|_| zh.to_string()),
+        None => zh.to_string(),
+    }
+}
+
+/// 处理 backend turn 的成功结果：英→中翻译 + LLM summary + emit complete + 状态归位。
+fn finalize_session(
+    app: &AppHandle,
+    state: &Arc<AppState>,
+    session_id: &str,
+    user_zh: &str,
+    result_en: String,
+    llm: Option<&LlmConfig>,
+) {
+    let snapshot = match state.manager.lock() {
+        Ok(mgr) => mgr
+            .sessions
+            .get(session_id)
+            .map(|s| Arc::clone(&s.snapshot)),
+        Err(_) => None,
+    };
+
+    let result_zh = match llm {
+        Some(cfg) => translate_en_to_zh(cfg, &result_en).unwrap_or_else(|_| result_en.clone()),
+        None => result_en.clone(),
+    };
+
+    let (mode, emotion, summary, suggestion_options) = match llm {
+        Some(cfg) => match generate_agent_summary(cfg, user_zh, &result_zh) {
+            Ok(s) => (
+                Some(s.mode),
+                Some(s.emotion_speech),
+                Some(s.summary_translation),
+                Some(s.next_options),
+            ),
+            Err(e) => (
+                Some("error".into()),
+                Some(format!("LLM 总结生成失败: {}", e)),
+                Some(format!(
+                    "Agent 原始输出:\n{}",
+                    result_zh.chars().take(500).collect::<String>()
+                )),
+                Some(vec!["重试".into()]),
+            ),
+        },
+        None => {
+            let no_llm_hint = "未配置 LLM API Key（在设置中配置后，将自动总结 Agent 输出）";
+            (
+                Some("complete".into()),
+                Some(no_llm_hint.into()),
+                Some(result_zh.chars().take(500).collect::<String>()),
+                Some(vec!["配置 API Key".into(), "重试".into()]),
+            )
+        }
+    };
+
+    if let Some(snap) = snapshot {
+        if let Ok(mut s) = snap.lock() {
+            s.status = match mode.as_deref() {
+                Some("error") => AgentStatus::Error,
+                _ => AgentStatus::Completed,
+            };
+            s.last_assistant_message = Some(result_zh.clone());
+        }
+    }
+
+    let _ = app.emit(
+        "agent://session-complete",
+        SessionCompletePayload {
+            session_id: session_id.to_string(),
+            mode: mode.clone(),
+            emotion: emotion.clone(),
+            summary_translation: summary.clone(),
+            result_raw: Some(result_en.clone()),
+            result_zh: Some(result_zh.clone()),
+            suggestion_options: suggestion_options.clone(),
+        },
+    );
+
+    // Legacy 兼容事件
+    let _ = app.emit(
+        "agent-done",
+        serde_json::json!({
+            "resultRaw": result_en,
+            "resultZh": result_zh,
+            "sessionId": session_id,
+        }),
+    );
+    if let Some(opts) = suggestion_options {
+        let _ = app.emit(
+            "suggestion-ready",
+            serde_json::json!({ "options": opts, "sessionId": session_id }),
+        );
+    }
+
+    clear_active_demo_session(state, session_id);
+}
+
+fn fail_session(
+    app: &AppHandle,
+    state: &Arc<AppState>,
+    session_id: &str,
+    message: &str,
+    code: &str,
+) {
+    if let Ok(mgr) = state.manager.lock() {
+        if let Some(s) = mgr.sessions.get(session_id) {
+            if let Ok(mut snap) = s.snapshot.lock() {
+                snap.status = AgentStatus::Error;
+                snap.last_assistant_message = Some(message.to_string());
+            }
+        }
+    }
+    emit_err(app, session_id, message, code);
+    let _ = app.emit(
+        "agent://session-complete",
+        SessionCompletePayload {
+            session_id: session_id.to_string(),
+            mode: Some("error".into()),
+            emotion: Some(format!("Agent 出错了: {}", message)),
+            summary_translation: Some(message.to_string()),
+            result_raw: None,
+            result_zh: None,
+            suggestion_options: Some(vec![]),
+        },
+    );
+    clear_active_demo_session(state, session_id);
+}
+
+fn emit_status_running(app: &AppHandle, session_id: &str, description: &str) {
+    let _ = app.emit(
+        "agent://status-changed",
+        events::StatusChangedPayload {
+            session_id: session_id.to_string(),
+            status: AgentStatus::Running,
+            tool_name: None,
+            tool_description: Some(description.to_string()),
+            percent: Some(0.0),
+        },
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Demo 路径专用：stdout 行 → HookEvent → SideEffect 管线
+// ---------------------------------------------------------------------------
 
 fn push_log(logs: &Arc<Mutex<Vec<String>>>, line: String) {
     if let Ok(mut g) = logs.lock() {
@@ -383,254 +838,6 @@ fn run_stdout_loop(
         return;
     };
 
-    // When agent itself errored, skip LLM pipeline and show error directly
-    if agent_errored {
-        if let Ok(mut s) = snapshot.lock() {
-            s.status = AgentStatus::Error;
-            s.last_assistant_message = Some(result_en.clone());
-        }
-        emit_err(&app, &session_id, &result_en, "AGENT_ERROR");
-        // Also emit session-complete with error mode so frontend shows ResultCard
-        let _ = app.emit(
-            "agent://session-complete",
-            SessionCompletePayload {
-                session_id: session_id.clone(),
-                mode: Some("error".into()),
-                emotion: Some(format!("Agent 出错了: {}", result_en)),
-                summary_translation: Some(result_en),
-                result_raw: None,
-                result_zh: None,
-                suggestion_options: Some(vec![]),
-            },
-        );
-        clear_active_demo_session(&state, &session_id);
-        return;
-    }
-
-    let result_zh = match &llm {
-        Some(cfg) => translate_en_to_zh(cfg, &result_en).unwrap_or_else(|_| result_en.clone()),
-        None => result_en.clone(),
-    };
-
-    let (mode, emotion, summary, suggestion_options) = match &llm {
-        Some(cfg) => match generate_agent_summary(cfg, &user_zh, &result_zh) {
-            Ok(s) => (
-                Some(s.mode.clone()),
-                Some(s.emotion_speech.clone()),
-                Some(s.summary_translation.clone()),
-                Some(s.next_options.clone()),
-            ),
-            Err(e) => (
-                Some("error".into()),
-                Some(format!("LLM 总结生成失败: {}", e)),
-                Some(format!("Agent 原始输出:\n{}", result_zh.chars().take(500).collect::<String>())),
-                Some(vec!["重试".into()]),
-            ),
-        },
-        None => {
-            let no_llm_hint = "未配置 LLM API Key（在设置中配置后，将自动总结 Agent 输出）";
-            (
-                Some("complete".into()),
-                Some(no_llm_hint.into()),
-                Some(result_zh.chars().take(500).collect::<String>()),
-                Some(vec!["配置 API Key".into(), "重试".into()]),
-            )
-        }
-    };
-
-    if let Ok(mut s) = snapshot.lock() {
-        s.status = match mode.as_deref() {
-            Some("error") => AgentStatus::Error,
-            _ => AgentStatus::Completed,
-        };
-        s.last_assistant_message = Some(result_zh.clone());
-    }
-
-    let _ = app.emit(
-        "agent://session-complete",
-        SessionCompletePayload {
-            session_id: session_id.clone(),
-            mode: mode.clone(),
-            emotion: emotion.clone(),
-            summary_translation: summary.clone(),
-            result_raw: Some(result_en.clone()),
-            result_zh: Some(result_zh.clone()),
-            suggestion_options: suggestion_options.clone(),
-        },
-    );
-
-    // Legacy events
-    let _ = app.emit(
-        "agent-done",
-        serde_json::json!({
-            "resultRaw": result_en,
-            "resultZh": result_zh,
-            "sessionId": session_id,
-        }),
-    );
-    if let Some(opts) = suggestion_options {
-        // You could emit suggestion-ready with the first option, or change the frontend to expect an array.
-        // For backwards compatibility we can just join them or pass the array.
-        let _ = app.emit(
-            "suggestion-ready",
-            serde_json::json!({ "options": opts, "sessionId": session_id }),
-        );
-    }
-
-    clear_active_demo_session(&state, &session_id);
-}
-
-/// Poll the JSONL output file for new lines, parse events, and emit IPC updates.
-/// This replaces the stdout pipe approach — the agent runs in a visible terminal
-/// and writes its output to both the terminal and this file (via Tee).
-fn run_file_monitor(
-    app: AppHandle,
-    state: Arc<AppState>,
-    session_id: String,
-    output_file: PathBuf,
-    script_file: PathBuf,
-    user_zh: String,
-    llm: Option<LlmConfig>,
-) {
-    let (snapshot, logs) = {
-        let mgr = match state.manager.lock() {
-            Ok(g) => g,
-            Err(_) => return,
-        };
-        let Some(s) = mgr.sessions.get(&session_id) else {
-            return;
-        };
-        (Arc::clone(&s.snapshot), Arc::clone(&s.logs))
-    };
-
-    let mut line_count: usize = 0;
-    let mut last_result_en: Option<String> = None;
-    let mut agent_errored = false;
-    let max_idle = Duration::from_secs(600); // 10 min timeout with no output
-    let poll_interval = Duration::from_millis(500);
-    let mut idle_since = Instant::now();
-    let start = Instant::now();
-
-    // Wait a moment for the terminal to open and the file to be created
-    std::thread::sleep(Duration::from_secs(2));
-
-    loop {
-        match read_new_lines(&output_file, &mut line_count) {
-            Ok(lines) => {
-                if lines.is_empty() {
-                    // No new lines — check timeout
-                    if idle_since.elapsed() > max_idle && start.elapsed() > Duration::from_secs(15) {
-                        if last_result_en.is_none() {
-                            emit_err(
-                                &app,
-                                &session_id,
-                                "Agent 超时：终端无新输出（10分钟）",
-                                "TIMEOUT",
-                            );
-                        }
-                        break;
-                    }
-                    std::thread::sleep(poll_interval);
-                    continue;
-                }
-                idle_since = Instant::now();
-
-                for line in lines {
-                    let line = line.trim().to_string();
-                    if line.is_empty() {
-                        continue;
-                    }
-                    push_log(&logs, line.clone());
-
-                    if let Some(ev) = HookEvent::from_json_line(&line) {
-                        if ev.event_name == "Stop" {
-                            let is_error = ev
-                                .raw_json
-                                .get("type")
-                                .and_then(|x| x.as_str())
-                                .map(|t| t == "error")
-                                .unwrap_or(false);
-                            if is_error {
-                                agent_errored = true;
-                            }
-                            last_result_en = ev
-                                .raw_json
-                                .get("output_en")
-                                .and_then(|x| x.as_str())
-                                .map(|s| s.to_string())
-                                .or_else(|| {
-                                    ev.raw_json
-                                        .get("output")
-                                        .and_then(|x| x.as_str())
-                                        .map(|s| s.to_string())
-                                });
-                        }
-
-                        let effects = {
-                            let mut snap = match snapshot.lock() {
-                                Ok(g) => g,
-                                Err(_) => continue,
-                            };
-                            reduce_event(&mut snap, &ev)
-                        };
-                        crate::ipc::events::apply_side_effects(&app, &session_id, effects);
-
-                        legacy_emit_progress(&app, &session_id, &ev);
-                    } else {
-                        let _ = app.emit(
-                            "agent-progress",
-                            serde_json::json!({
-                                "stage": "log",
-                                "rawLine": line.clone(),
-                                "sessionId": session_id,
-                            }),
-                        );
-                        let _ = app.emit(
-                            "agent://log",
-                            events::LogPayload {
-                                session_id: session_id.clone(),
-                                level: "debug".into(),
-                                message: line.clone(),
-                                timestamp: chrono::Utc::now().to_rfc3339(),
-                            },
-                        );
-                    }
-                }
-            }
-            Err(e) => {
-                log::warn!("read_new_lines error: {}", e);
-                std::thread::sleep(poll_interval);
-                continue;
-            }
-        }
-
-        // Check if agent has finished (saw a result/error)
-        if last_result_en.is_some() {
-            // Give it a bit more time for the terminal to flush
-            std::thread::sleep(Duration::from_secs(1));
-            break;
-        }
-
-        std::thread::sleep(poll_interval);
-    }
-
-    // --- Process result (same logic as run_stdout_loop) ---
-
-    let Some(result_en) = last_result_en else {
-        if let Ok(mut s) = snapshot.lock() {
-            s.status = AgentStatus::Error;
-        }
-        emit_err(
-            &app,
-            &session_id,
-            "Agent 未返回结构化结果（终端可能已关闭）",
-            "MISSING_RESULT",
-        );
-        cleanup_temp_files(&output_file, &script_file);
-        clear_active_demo_session(&state, &session_id);
-        return;
-    };
-
     if agent_errored {
         if let Ok(mut s) = snapshot.lock() {
             s.status = AgentStatus::Error;
@@ -649,90 +856,11 @@ fn run_file_monitor(
                 suggestion_options: Some(vec![]),
             },
         );
-        cleanup_temp_files(&output_file, &script_file);
         clear_active_demo_session(&state, &session_id);
         return;
     }
 
-    let result_zh = match &llm {
-        Some(cfg) => translate_en_to_zh(cfg, &result_en).unwrap_or_else(|_| result_en.clone()),
-        None => result_en.clone(),
-    };
-
-    let (mode, emotion, summary, suggestion_options) = match &llm {
-        Some(cfg) => match generate_agent_summary(cfg, &user_zh, &result_zh) {
-            Ok(s) => (
-                Some(s.mode.clone()),
-                Some(s.emotion_speech.clone()),
-                Some(s.summary_translation.clone()),
-                Some(s.next_options.clone()),
-            ),
-            Err(e) => (
-                Some("error".into()),
-                Some(format!("LLM 总结生成失败: {}", e)),
-                Some(format!("Agent 原始输出:\n{}", result_zh.chars().take(500).collect::<String>())),
-                Some(vec!["重试".into()]),
-            ),
-        },
-        None => {
-            let no_llm_hint = "未配置 LLM API Key（在设置中配置后，将自动总结 Agent 输出）";
-            (
-                Some("complete".into()),
-                Some(no_llm_hint.into()),
-                Some(result_zh.chars().take(500).collect::<String>()),
-                Some(vec!["配置 API Key".into(), "重试".into()]),
-            )
-        }
-    };
-
-    if let Ok(mut s) = snapshot.lock() {
-        s.status = match mode.as_deref() {
-            Some("error") => AgentStatus::Error,
-            _ => AgentStatus::Completed,
-        };
-        s.last_assistant_message = Some(result_zh.clone());
-    }
-
-    let _ = app.emit(
-        "agent://session-complete",
-        SessionCompletePayload {
-            session_id: session_id.clone(),
-            mode: mode.clone(),
-            emotion: emotion.clone(),
-            summary_translation: summary.clone(),
-            result_raw: Some(result_en.clone()),
-            result_zh: Some(result_zh.clone()),
-            suggestion_options: suggestion_options.clone(),
-        },
-    );
-
-    let _ = app.emit(
-        "agent-done",
-        serde_json::json!({
-            "resultRaw": result_en,
-            "resultZh": result_zh,
-            "sessionId": session_id,
-        }),
-    );
-
-    if let Some(opts) = suggestion_options {
-        let _ = app.emit(
-            "suggestion-ready",
-            serde_json::json!({ "options": opts, "sessionId": session_id }),
-        );
-    }
-
-    cleanup_temp_files(&output_file, &script_file);
-    clear_active_demo_session(&state, &session_id);
-}
-
-fn cleanup_temp_files(output_file: &PathBuf, script_file: &PathBuf) {
-    if let Err(e) = std::fs::remove_file(output_file) {
-        log::debug!("Failed to remove output file {}: {}", output_file.display(), e);
-    }
-    if let Err(e) = std::fs::remove_file(script_file) {
-        log::debug!("Failed to remove script file {}: {}", script_file.display(), e);
-    }
+    finalize_session(&app, &state, &session_id, &user_zh, result_en, llm.as_ref());
 }
 
 fn clear_active_demo_session(state: &Arc<AppState>, session_id: &str) {
@@ -782,20 +910,35 @@ fn emit_err(app: &AppHandle, session_id: &str, message: &str, code: &str) {
     );
 }
 
-pub fn stop_session(app: AppHandle, state: Arc<AppState>, session_id: String) -> Result<(), String> {
-    let child_slot = {
+// ---------------------------------------------------------------------------
+// 停止会话
+// ---------------------------------------------------------------------------
+
+pub fn stop_session(
+    app: AppHandle,
+    state: Arc<AppState>,
+    runtime_state: Arc<RuntimeState>,
+    session_id: String,
+) -> Result<(), String> {
+    let (child_slot, agent_type) = {
         let mut mgr = state.manager.lock().map_err(|e| e.to_string())?;
         mgr.clear_active_demo_session_if(&session_id);
         let Some(sess) = mgr.sessions.get_mut(&session_id) else {
             return Err("会话不存在".into());
         };
+        let agent_type = sess
+            .snapshot
+            .lock()
+            .map(|s| s.agent_type.clone())
+            .unwrap_or_default();
         if let Ok(mut s) = sess.snapshot.lock() {
             s.interrupted = true;
             s.status = AgentStatus::Idle;
         }
-        Arc::clone(&sess.child)
+        (Arc::clone(&sess.child), agent_type)
     };
 
+    // demo 路径直接 kill child
     {
         let mut g = child_slot.lock().map_err(|e| e.to_string())?;
         if let Some(mut c) = g.take() {
@@ -803,6 +946,12 @@ pub fn stop_session(app: AppHandle, state: Arc<AppState>, session_id: String) ->
             let _ = c.wait();
         }
     }
+
+    // claude / codex / opencode 的 client 在 RuntimeState 里。
+    // 当前实现：不杀整个 client（避免影响其他可能正在跑的 turn 复用）。
+    // app 退出时统一 drain_*_clients 清理。
+    // 如果未来要单独中断当前 turn，可以在每个 backend 加 abort_turn 接口。
+    let _ = (runtime_state, agent_type);
 
     let _ = app.emit(
         "agent://status-changed",
@@ -818,6 +967,10 @@ pub fn stop_session(app: AppHandle, state: Arc<AppState>, session_id: String) ->
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// 杂项
+// ---------------------------------------------------------------------------
+
 pub fn get_logs(state: Arc<AppState>, session_id: String) -> Result<Vec<String>, String> {
     let mgr = state
         .manager
@@ -828,4 +981,27 @@ pub fn get_logs(state: Arc<AppState>, session_id: String) -> Result<Vec<String>,
     };
     let g = s.logs.lock().map_err(|e| e.to_string())?;
     Ok(g.clone())
+}
+
+/// 用于 app 退出时清理所有 backend client。
+pub fn shutdown_runtime_clients(runtime_state: &RuntimeState) {
+    use crate::agent::runtime::{drain_claude_clients, drain_codex_clients, drain_opencode_states};
+
+    for client in drain_claude_clients(runtime_state) {
+        kill_claude_client(&client);
+    }
+    for client in drain_codex_clients(runtime_state) {
+        client.stop();
+    }
+    drain_opencode_states(runtime_state, |_run_id, opencode| {
+        if let Some(child) = opencode.child.as_mut() {
+            crate::agent::sysutils::kill_child_descendants(child.id());
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    });
+}
+
+fn kill_claude_client(client: &ClaudeStreamClient) {
+    crate::agent::claude::kill_claude_stream_client(client);
 }

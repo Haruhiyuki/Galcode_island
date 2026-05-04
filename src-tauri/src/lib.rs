@@ -34,12 +34,17 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(Arc::new(AppState::new()))
+        .manage(Arc::new(agent::runtime::RuntimeState::default()))
         .setup(|app| {
             hook::watcher::try_spawn_hook_log_watcher();
 
             let handle = app.handle().clone();
             let state = app.state::<Arc<AppState>>();
-            session::cleanup::spawn_idle_cleanup_loop(handle, Arc::clone(&state));
+            session::cleanup::spawn_idle_cleanup_loop(handle.clone(), Arc::clone(&state));
+
+            // 启动时清理上一轮崩溃 / 强退留下的 opencode/codex/claude 孤儿子进程，
+            // 避免端口被占用或重复消耗 token。
+            agent::sysutils::cleanup_stale_runtime_orphans(&handle);
 
             ipc::tray::setup_tray(app).map_err(|e| {
                 log::warn!("tray setup skipped: {}", e);

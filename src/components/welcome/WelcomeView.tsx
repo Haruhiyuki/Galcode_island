@@ -8,6 +8,7 @@ import type { AgentType } from "../../types/agent";
 const agentOptions = [
   { value: "claude-code", label: "Claude Code" },
   { value: "opencode", label: "OpenCode" },
+  { value: "codex", label: "Codex" },
 ] as const;
 
 const titleChars = "Galcode Island".split("");

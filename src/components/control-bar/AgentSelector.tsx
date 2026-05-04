@@ -6,6 +6,7 @@ import type { AgentType } from "../../types/agent";
 const agentOptions: { value: AgentType; label: string }[] = [
   { value: "claude-code", label: "Claude Code" },
   { value: "opencode", label: "OpenCode" },
+  { value: "codex", label: "Codex" },
 ];
 
 export function AgentSelector(): JSX.Element {
