@@ -83,7 +83,15 @@ export function MainView(): JSX.Element {
   const projectPath = useAppStore((s) => s.projectPath);
   const uiState = useAppStore((s) => s.uiState);
   const mode = useAppStore((s) => s.mode);
-  const showStatus = uiState === "running" || mode === "working" || mode === "thinking";
+  const cliBlockCount = useAppStore((s) => s.cliBlocks.length);
+  // 完成后保留 StatusMonitor 让 BlockStream 历史可见，跟 ResultCard 共存。
+  // 下一轮提交时 InputBubble.handleLaunch 会 setSessionId(null) → useCliStream
+  // 自动 clearCliBlocks，StatusMonitor 显示空占位再开始新一轮累积。
+  const showStatus =
+    uiState === "running" ||
+    mode === "working" ||
+    mode === "thinking" ||
+    cliBlockCount > 0;
 
   return (
     <motion.section
