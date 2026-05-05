@@ -8,6 +8,7 @@ import type {
   TodoItem,
   UiState,
 } from "../types/agent";
+import type { CliBlock } from "../types/blocks";
 
 export type ThemeMode = "light" | "dark";
 export type AppView = "welcome" | "main" | "settings";
@@ -36,6 +37,10 @@ interface AppState {
   suggestionOptions: string[];
   lastStage: LastStage;
 
+  // CLI 流式 block —— useCliStream 在 App 顶层订阅，blocks 写到这里，
+  // BlockStream 等组件只读不写，避免组件 mount/unmount 反复注册 listener。
+  cliBlocks: CliBlock[];
+
   // Actions
   setCurrentView: (view: AppView) => void;
   setIsStarted: (isStarted: boolean) => void;
@@ -59,6 +64,9 @@ interface AppState {
   addLogEntry: (entry: LogEntry) => void;
   clearLogs: () => void;
   resetSession: () => void;
+  appendCliBlock: (block: CliBlock) => void;
+  upsertCliBlock: (block: CliBlock) => void;
+  clearCliBlocks: () => void;
 }
 
 const getSystemTheme = (): ThemeMode => {
@@ -100,6 +108,7 @@ export const useAppStore = create<AppState>((set) => ({
   emotionText: "",
   suggestionOptions: [],
   lastStage: "default",
+  cliBlocks: [],
 
   setCurrentView: (view) => set({ currentView: view }),
   setIsStarted: (isStarted) => set({ isStarted }),
@@ -133,6 +142,23 @@ export const useAppStore = create<AppState>((set) => ({
       logEntries: [...state.logEntries.slice(-79), entry],
     })),
   clearLogs: () => set({ logEntries: [] }),
+  appendCliBlock: (block) =>
+    set((state) => {
+      const next = [...state.cliBlocks, block];
+      return { cliBlocks: next.length > 200 ? next.slice(-180) : next };
+    }),
+  upsertCliBlock: (block) =>
+    set((state) => {
+      const idx = state.cliBlocks.findIndex((b) => b.id === block.id);
+      if (idx >= 0) {
+        const next = state.cliBlocks.slice();
+        next[idx] = { ...next[idx], ...block };
+        return { cliBlocks: next };
+      }
+      const next = [...state.cliBlocks, block];
+      return { cliBlocks: next.length > 200 ? next.slice(-180) : next };
+    }),
+  clearCliBlocks: () => set({ cliBlocks: [] }),
   resetSession: () =>
     set({
       percent: 0,

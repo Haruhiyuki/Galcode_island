@@ -19,14 +19,20 @@ export function StatusMonitor(): JSX.Element {
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -10 }}
           transition={{ duration: 0.3 }}
-          className="flex flex-col gap-3 rounded-xl border border-white/60 bg-white/70 p-4 shadow-[0_8px_30px_rgba(0,0,0,0.04)] backdrop-blur-2xl dark:border-white/10 dark:bg-slate-800/60 dark:shadow-none"
+          className="flex h-full min-h-0 flex-col gap-3 overflow-hidden rounded-xl border border-white/60 bg-white/70 p-4 shadow-[0_8px_30px_rgba(0,0,0,0.04)] backdrop-blur-2xl dark:border-white/10 dark:bg-slate-800/60 dark:shadow-none"
         >
-          <div className="flex items-center justify-between">
+          <div className="flex shrink-0 items-center justify-between">
             <AgentStatusBadge />
           </div>
-          <TodoProgress />
-          <BlockStream />
-          <LogStream />
+          <div className="shrink-0">
+            <TodoProgress />
+          </div>
+          <div className="min-h-0 flex-1">
+            <BlockStream />
+          </div>
+          <div className="shrink-0">
+            <LogStream />
+          </div>
         </motion.section>
       )}
     </AnimatePresence>

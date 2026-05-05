@@ -1,25 +1,23 @@
 // 订阅 `galcode://cli-output` 事件，把后端 emit 的 block JSON 归一成
-// 统一的 CliBlock 列表，按 id 去重（后续事件是 update，覆盖前一个）。
+// 统一的 CliBlock 列表，写到 useAppStore.cliBlocks（全局 store）。
+//
+// **关键**：这个 hook 只在 App 顶层 mount 一次，listener 永久有效。
+// 之前在 BlockStream 里 mount，组件随 StatusMonitor 显示/隐藏反复重建
+// listener，会丢早到的事件。
 //
 // 流式 update 模式：
 //   - text/thought/agentMessage 等增量类 block：后端发一连串同 id 的更新，content
-//     是累积后的完整文本，前端直接覆盖即可（不要 push 多条）
+//     是累积后的完整文本，前端直接 upsert（覆盖前一个）
 //   - command output delta：output 字段累积更新
 //   - todo：items 数组覆盖
 //
-// 自动切换会话：当 useAppStore.sessionId 变化时清空旧 blocks，避免上一轮的
-// 流串到下一轮显示。
+// sessionId 切换时清空旧 blocks（在 InputBubble.handleLaunch 里 setSessionId(null)
+// 触发，下面的 store subscriber 会自动 clearCliBlocks）。
 
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { useAppStore } from "../stores/useAppStore";
 import type { CliBlock, CliStreamEvent } from "../types/blocks";
-
-// thought 出现时让宠物切到 thinking 表情。session-complete 会自然把 mode 重置。
-function notifyThoughtToPet(): void {
-  const setMode = useAppStore.getState().setMode;
-  setMode("thinking");
-}
 
 let stderrCounter = 0;
 
@@ -29,7 +27,7 @@ interface RawWrappedBlock {
 }
 
 interface RawOpencodeEvent {
-  type: string;             // "opencode.tool" / "opencode.file" / "opencode.status" / "opencode.error"
+  type: string;
   id?: string;
   tool?: string;
   path?: string;
@@ -44,7 +42,6 @@ function normalizeBlock(parsed: unknown): CliBlock | null {
   const obj = parsed as Record<string, unknown>;
   const topType = obj.type as string | undefined;
 
-  // 包装格式：{ type: "galcode.block", block: {...} }
   if (topType === "galcode.block" && obj.block && typeof obj.block === "object") {
     const wrapped = (parsed as RawWrappedBlock).block;
     if (!wrapped.id || !wrapped.type) return null;
@@ -55,10 +52,9 @@ function normalizeBlock(parsed: unknown): CliBlock | null {
     } as CliBlock;
   }
 
-  // OpenCode 专属：{ type: "opencode.xxx", ... }
   if (typeof topType === "string" && topType.startsWith("opencode.")) {
     const ev = parsed as RawOpencodeEvent;
-    const subType = topType.slice("opencode.".length); // tool / file / status / error
+    const subType = topType.slice("opencode.".length);
     if (subType !== "tool" && subType !== "file" && subType !== "status" && subType !== "error") {
       return null;
     }
@@ -79,16 +75,15 @@ function normalizeBlock(parsed: unknown): CliBlock | null {
   return null;
 }
 
-export function useCliStream(): { blocks: CliBlock[] } {
-  const [blocks, setBlocks] = useState<CliBlock[]>([]);
+/// 在 App 顶层挂一次。
+export function useCliStream(): void {
   const sessionIdRef = useRef<string | null>(null);
 
-  // 当前会话变化时清空 block 列表（避免上轮流串到下轮）
   useEffect(() => {
     return useAppStore.subscribe((state) => {
       if (state.sessionId !== sessionIdRef.current) {
         sessionIdRef.current = state.sessionId;
-        setBlocks([]);
+        useAppStore.getState().clearCliBlocks();
       }
     });
   }, []);
@@ -96,25 +91,31 @@ export function useCliStream(): { blocks: CliBlock[] } {
   useEffect(() => {
     const unsubs: UnlistenFn[] = [];
     const run = async () => {
+      console.log("[cli-stream] listener registered (App-level)");
       const unsub = await listen<CliStreamEvent>("galcode://cli-output", (e) => {
         const payload = e.payload;
         if (!payload?.line) return;
 
-        // stderr 行：直接包成 stderr block（不尝试 JSON 解析，多半是诊断 / warning）
+        console.log(
+          "[cli-stream]",
+          payload.backend,
+          payload.channel,
+          "len:",
+          payload.line.length,
+          "preview:",
+          payload.line.slice(0, 100)
+        );
+
         if (payload.channel === "stderr") {
           const trimmed = payload.line.trim();
           if (!trimmed) return;
           stderrCounter += 1;
-          const block: CliBlock = {
+          useAppStore.getState().appendCliBlock({
             id: `stderr-${payload.streamId || payload.backend}-${stderrCounter}`,
             type: "stderr",
             backend: payload.backend,
             channel: "stderr",
             message: trimmed,
-          };
-          setBlocks((prev) => {
-            const appended = [...prev, block];
-            return appended.length > 200 ? appended.slice(-180) : appended;
           });
           return;
         }
@@ -123,32 +124,21 @@ export function useCliStream(): { blocks: CliBlock[] } {
         try {
           parsed = JSON.parse(payload.line);
         } catch {
-          return; // stdout 上的非 JSON 行（如 OpenCode "Turn started"）忽略
+          return;
         }
 
         const block = normalizeBlock(parsed);
-        if (!block) return;
-
-        // thought 类型：联动桌宠切 thinking 表情
-        if (block.type === "thought") {
-          notifyThoughtToPet();
+        if (!block) {
+          const t = (parsed as { type?: string })?.type;
+          if (t) console.log("[cli-stream] skipped JSON, top type=", t);
+          return;
         }
 
-        setBlocks((prev) => {
-          const idx = prev.findIndex((b) => b.id === block.id);
-          if (idx >= 0) {
-            // 同 id 的后续事件覆盖（流式 update）
-            const next = prev.slice();
-            next[idx] = { ...prev[idx], ...block };
-            return next;
-          }
-          // 新 block：限制总数（防止内存爆炸 / DOM 卡顿）
-          const appended = [...prev, block];
-          if (appended.length > 200) {
-            return appended.slice(-180);
-          }
-          return appended;
-        });
+        console.log("[cli-stream] block accepted:", block.type, block.id);
+        if (block.type === "thought") {
+          useAppStore.getState().setMode("thinking");
+        }
+        useAppStore.getState().upsertCliBlock(block);
       });
       unsubs.push(unsub);
     };
@@ -163,6 +153,4 @@ export function useCliStream(): { blocks: CliBlock[] } {
       }
     };
   }, []);
-
-  return { blocks };
 }

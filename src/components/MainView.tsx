@@ -104,7 +104,8 @@ export function MainView(): JSX.Element {
         <StatusLight />
       </div>
 
-      {/* Status Monitor Section */}
+      {/* Status Monitor Section —— flex-1 + min-h-0 让它在 turn 期间占满中部空间，
+          BlockStream 在内部能拿到足够高度显示流式块 */}
       <AnimatePresence mode="popLayout">
         {showStatus && (
           <motion.div
@@ -113,14 +114,16 @@ export function MainView(): JSX.Element {
             animate={{ opacity: 1, height: "auto", scale: 1 }}
             exit={{ opacity: 0, height: 0, scale: 0.98 }}
             transition={{ duration: 0.3 }}
-            className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden"
+            className="flex flex-1 min-h-0 flex-col overflow-hidden"
           >
             <StatusMonitor />
           </motion.div>
         )}
       </AnimatePresence>
 
-      <div className="flex-1" />
+      {/* 没在跑时给个弹簧保证 PetCharacter 在底部；跑起来时 StatusMonitor 已经
+          flex-1 占空间，这个 spacer 会被压缩掉 */}
+      {!showStatus && <div className="flex-1" />}
 
       {/* Pet & Bubble Interaction Area */}
       <div className="flex w-full items-end gap-3 relative min-h-[220px]">

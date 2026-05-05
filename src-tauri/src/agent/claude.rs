@@ -493,11 +493,17 @@ pub fn claude_stream_error_message(event: &Value) -> Option<String> {
 // 文件编辑 diff 提取
 // ---------------------------------------------------------------------------
 
-/// 从 Claude stream-json 的 assistant 消息里解析 Edit / MultiEdit / Write 工具调用，
-/// 生成 `galcode.block` diff 块塞回前端。简化版 diff：old→`-` 行、new→`+` 行，
-/// 不做 LCS 对齐——文件 diff 看 +/- 已经直观，对齐留给前端工具调用查看器。
-pub fn extract_claude_diff_blocks(event: &Value) -> Vec<Value> {
+/// 从 Claude stream-json 行解析所有有意义的 content 项，转成 galcode.block 列表。
+/// 覆盖：
+///   - assistant.text → text block（Agent 中间消息）
+///   - assistant.thinking → thought block（推理过程）
+///   - assistant.tool_use Edit/MultiEdit/Write → diff block（带 +/- 染色）
+///   - assistant.tool_use Bash → command block（终端样式）
+///   - assistant.tool_use Read/Write/Grep/Glob 等 → file block 或 tool block
+///   - user.tool_result → 关联 tool_use_id，覆盖之前的 tool/command block status+output
+pub fn extract_claude_blocks(event: &Value) -> Vec<Value> {
     let mut out = Vec::new();
+    let event_type = event.get("type").and_then(Value::as_str).unwrap_or("");
     let Some(content) = event
         .get("message")
         .and_then(|m| m.get("content"))
@@ -507,64 +513,222 @@ pub fn extract_claude_diff_blocks(event: &Value) -> Vec<Value> {
     };
 
     for item in content {
-        if item.get("type").and_then(Value::as_str) != Some("tool_use") {
-            continue;
-        }
-        let name = item.get("name").and_then(Value::as_str).unwrap_or("");
-        let id = item
-            .get("id")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| format!("tool-{}", chrono::Utc::now().timestamp_millis()));
-        let input = match item.get("input") {
-            Some(value) => value,
-            None => continue,
-        };
-
-        let block = match name {
-            "Edit" => {
-                let path = input.get("file_path").and_then(Value::as_str).unwrap_or("");
-                let old = input.get("old_string").and_then(Value::as_str).unwrap_or("");
-                let new = input.get("new_string").and_then(Value::as_str).unwrap_or("");
-                if path.is_empty() && old.is_empty() && new.is_empty() {
+        let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
+        match item_type {
+            "text" if event_type == "assistant" => {
+                let text = item.get("text").and_then(Value::as_str).unwrap_or("").trim();
+                if text.is_empty() {
                     continue;
                 }
-                build_diff_block(&id, "Edit", path, &simple_diff(old, new))
-            }
-            "MultiEdit" => {
-                let path = input.get("file_path").and_then(Value::as_str).unwrap_or("");
-                let edits = input
-                    .get("edits")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default();
-                let mut diff_text = String::new();
-                for (i, edit) in edits.iter().enumerate() {
-                    let old = edit.get("old_string").and_then(Value::as_str).unwrap_or("");
-                    let new = edit.get("new_string").and_then(Value::as_str).unwrap_or("");
-                    if i > 0 {
-                        diff_text.push_str("\n@@\n");
+                let id = item
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| format!("text-{}", chrono::Utc::now().timestamp_millis()));
+                out.push(json!({
+                    "type": "galcode.block",
+                    "block": {
+                        "id": format!("claude-text-{id}"),
+                        "type": "text",
+                        "content": text,
+                        "backend": "claude",
+                        "suppressLogLine": false
                     }
-                    diff_text.push_str(&simple_diff(old, new));
+                }));
+            }
+            "thinking" if event_type == "assistant" => {
+                let text = item
+                    .get("thinking")
+                    .or_else(|| item.get("text"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim();
+                if text.is_empty() {
+                    continue;
                 }
-                build_diff_block(&id, "MultiEdit", path, &diff_text)
+                let id = item
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| {
+                        format!("thought-{}", chrono::Utc::now().timestamp_millis())
+                    });
+                out.push(json!({
+                    "type": "galcode.block",
+                    "block": {
+                        "id": format!("claude-thought-{id}"),
+                        "type": "thought",
+                        "content": text,
+                        "backend": "claude",
+                        "suppressLogLine": true
+                    }
+                }));
             }
-            "Write" => {
-                let path = input.get("file_path").and_then(Value::as_str).unwrap_or("");
-                let content = input.get("content").and_then(Value::as_str).unwrap_or("");
-                let diff_text = content
-                    .lines()
-                    .map(|l| format!("+{l}"))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                build_diff_block(&id, "Write", path, &diff_text)
-            }
-            _ => continue,
-        };
+            "tool_use" if event_type == "assistant" => {
+                let name = item.get("name").and_then(Value::as_str).unwrap_or("Tool");
+                let id = item
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| format!("tool-{}", chrono::Utc::now().timestamp_millis()));
+                let input = item.get("input").cloned().unwrap_or(Value::Null);
 
-        out.push(json!({ "type": "galcode.block", "block": block }));
+                let block = match name {
+                    "Edit" => {
+                        let path = input.get("file_path").and_then(Value::as_str).unwrap_or("");
+                        let old = input.get("old_string").and_then(Value::as_str).unwrap_or("");
+                        let new = input.get("new_string").and_then(Value::as_str).unwrap_or("");
+                        if path.is_empty() && old.is_empty() && new.is_empty() {
+                            continue;
+                        }
+                        build_diff_block(&id, "Edit", path, &simple_diff(old, new))
+                    }
+                    "MultiEdit" => {
+                        let path = input.get("file_path").and_then(Value::as_str).unwrap_or("");
+                        let edits = input
+                            .get("edits")
+                            .and_then(Value::as_array)
+                            .cloned()
+                            .unwrap_or_default();
+                        let mut diff_text = String::new();
+                        for (i, edit) in edits.iter().enumerate() {
+                            let old = edit.get("old_string").and_then(Value::as_str).unwrap_or("");
+                            let new = edit.get("new_string").and_then(Value::as_str).unwrap_or("");
+                            if i > 0 {
+                                diff_text.push_str("\n@@\n");
+                            }
+                            diff_text.push_str(&simple_diff(old, new));
+                        }
+                        build_diff_block(&id, "MultiEdit", path, &diff_text)
+                    }
+                    "Write" => {
+                        let path = input.get("file_path").and_then(Value::as_str).unwrap_or("");
+                        let content = input.get("content").and_then(Value::as_str).unwrap_or("");
+                        let diff_text = content
+                            .lines()
+                            .map(|l| format!("+{l}"))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        build_diff_block(&id, "Write", path, &diff_text)
+                    }
+                    "Bash" => {
+                        let cmd = input
+                            .get("command")
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        json!({
+                            "id": format!("claude-cmd-{id}"),
+                            "type": "command",
+                            "command": cmd,
+                            "output": "",
+                            "status": "running",
+                            "backend": "claude",
+                            "suppressLogLine": false
+                        })
+                    }
+                    "Read" | "Grep" | "Glob" | "TodoWrite" | "WebFetch" | "WebSearch" => {
+                        let path = input
+                            .get("file_path")
+                            .or_else(|| input.get("path"))
+                            .and_then(Value::as_str);
+                        let detail = input
+                            .get("pattern")
+                            .or_else(|| input.get("query"))
+                            .or_else(|| input.get("url"))
+                            .or_else(|| input.get("prompt"))
+                            .and_then(Value::as_str);
+                        if let Some(path) = path {
+                            json!({
+                                "id": format!("claude-file-{id}"),
+                                "type": "file",
+                                "tool": name,
+                                "path": path,
+                                "status": "running",
+                                "backend": "claude",
+                                "suppressLogLine": false
+                            })
+                        } else {
+                            json!({
+                                "id": format!("claude-tool-{id}"),
+                                "type": "tool",
+                                "tool": name,
+                                "detail": detail,
+                                "status": "running",
+                                "backend": "claude",
+                                "suppressLogLine": false
+                            })
+                        }
+                    }
+                    _ => {
+                        // 通用：未知工具显示工具名 + input 字段摘要
+                        let detail = serde_json::to_string(&input)
+                            .ok()
+                            .map(|s| s.chars().take(80).collect::<String>());
+                        json!({
+                            "id": format!("claude-tool-{id}"),
+                            "type": "tool",
+                            "tool": name,
+                            "detail": detail,
+                            "status": "running",
+                            "backend": "claude",
+                            "suppressLogLine": false
+                        })
+                    }
+                };
+                out.push(json!({ "type": "galcode.block", "block": block }));
+            }
+            "tool_result" if event_type == "user" => {
+                // 关联到对应的 tool_use_id：前端按 block.id 去重，这里覆盖之前的
+                // running 状态为 success/error + 把 output 填上
+                let tool_use_id = item
+                    .get("tool_use_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let is_error = item
+                    .get("is_error")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let output = item
+                    .get("content")
+                    .and_then(|c| {
+                        // content 可能是 string，也可能是 [{type:text, text:...}] 数组
+                        c.as_str().map(ToOwned::to_owned).or_else(|| {
+                            c.as_array().map(|arr| {
+                                arr.iter()
+                                    .filter_map(|x| x.get("text").and_then(Value::as_str))
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            })
+                        })
+                    })
+                    .unwrap_or_default();
+                let status = if is_error { "error" } else { "success" };
+                // 同时更新 command 和 file/tool 类型——前端按 id 匹配，不存在的 id 自然忽略
+                for prefix in ["claude-cmd", "claude-file", "claude-tool"] {
+                    out.push(json!({
+                        "type": "galcode.block",
+                        "block": {
+                            "id": format!("{prefix}-{tool_use_id}"),
+                            "type": if prefix == "claude-cmd" { "command" } else if prefix == "claude-file" { "file" } else { "tool" },
+                            "status": status,
+                            "output": if prefix == "claude-cmd" { Some(output.clone()) } else { None },
+                            "message": if is_error { Some(output.clone()) } else { None },
+                            "backend": "claude",
+                            "suppressLogLine": true
+                        }
+                    }));
+                }
+            }
+            _ => {}
+        }
     }
     out
+}
+
+/// Backwards-compat 别名：原来的 extract_claude_diff_blocks 是 extract_claude_blocks 子集。
+#[allow(dead_code)]
+pub fn extract_claude_diff_blocks(event: &Value) -> Vec<Value> {
+    extract_claude_blocks(event)
 }
 
 fn simple_diff(old: &str, new: &str) -> String {
@@ -733,11 +897,32 @@ pub fn spawn_claude_stream_client(
                     }
                 }
 
-                // 解析 tool_use Edit/MultiEdit/Write，把 file diff 单独 emit 成
-                // galcode.block 给前端 BlockStream 渲染（绿+红-）
-                for diff_event in extract_claude_diff_blocks(&event) {
+                // 把 stream-json 的 assistant text/thinking/tool_use + user tool_result
+                // 翻译成 galcode.block，前端 BlockStream 才能渲染中间过程。
+                let blocks = extract_claude_blocks(&event);
+                if !blocks.is_empty() {
+                    let stream_id_dbg = stream_id.as_deref().unwrap_or("(none)");
+                    let types: Vec<String> = blocks
+                        .iter()
+                        .filter_map(|b| {
+                            b.get("block")
+                                .and_then(|x| x.get("type"))
+                                .and_then(|x| x.as_str())
+                                .map(ToOwned::to_owned)
+                        })
+                        .collect();
+                    eprintln!(
+                        "[claude] emit {} block(s): {} (stream_id={})",
+                        blocks.len(),
+                        types.join(","),
+                        stream_id_dbg
+                    );
+                }
+                for block_event in blocks {
                     if let Some(stream_id) = stream_id.as_deref() {
-                        emit_cli_stream_json_event(&app, "claude", stream_id, &diff_event);
+                        emit_cli_stream_json_event(&app, "claude", stream_id, &block_event);
+                    } else {
+                        eprintln!("[claude] WARN: block dropped — no active stream_id");
                     }
                 }
 
