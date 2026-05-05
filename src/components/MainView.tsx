@@ -25,10 +25,10 @@ function AgentSelector(): JSX.Element {
     <div className="relative inline-block text-left">
       <button
         onClick={() => setIsOpen((p) => !p)}
-        className="inline-flex w-full items-center justify-between gap-x-2 rounded-xl border border-white/40 bg-white/50 px-3 py-1.5 text-sm font-semibold text-zinc-700 shadow-sm backdrop-blur-md transition-all hover:bg-white/70 hover:shadow-md dark:border-white/10 dark:bg-zinc-800/50 dark:text-zinc-200 dark:hover:bg-zinc-800/70"
+        className="inline-flex items-center gap-1 rounded-md border border-white/40 bg-white/50 px-2 py-0.5 text-[11px] font-medium text-zinc-700 shadow-sm backdrop-blur-md transition-all hover:bg-white/70 dark:border-white/10 dark:bg-zinc-800/50 dark:text-zinc-200 dark:hover:bg-zinc-800/70"
       >
         {selectedLabel}
-        <svg className="-mr-1 h-5 w-5 text-zinc-400" viewBox="0 0 20 20" fill="currentColor">
+        <svg className="h-3 w-3 text-zinc-400" viewBox="0 0 20 20" fill="currentColor">
           <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
         </svg>
       </button>
@@ -39,7 +39,7 @@ function AgentSelector(): JSX.Element {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -5, scale: 0.95 }}
             transition={{ type: "spring", damping: 25, stiffness: 300 }}
-            className="absolute left-0 z-10 mt-2 w-40 origin-top-left overflow-hidden rounded-xl border border-white/40 bg-white/70 p-1 shadow-[0_8px_30px_rgba(0,0,0,0.06)] backdrop-blur-xl dark:border-white/10 dark:bg-zinc-800/80 dark:shadow-[0_8px_30px_rgba(0,0,0,0.2)]"
+            className="absolute left-0 z-10 mt-1 w-32 origin-top-left overflow-hidden rounded-md border border-white/40 bg-white/70 p-0.5 shadow-[0_8px_30px_rgba(0,0,0,0.06)] backdrop-blur-xl dark:border-white/10 dark:bg-zinc-800/80 dark:shadow-[0_8px_30px_rgba(0,0,0,0.2)]"
           >
             <div className="flex flex-col gap-0.5">
               {options.map((opt) => (
@@ -49,7 +49,7 @@ function AgentSelector(): JSX.Element {
                     setSelectedAgent(opt.value);
                     setIsOpen(false);
                   }}
-                  className="block w-full rounded-lg px-3 py-2 text-left text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100/80 dark:text-zinc-200 dark:hover:bg-zinc-700/50"
+                  className="block w-full rounded px-2 py-1 text-left text-[11px] font-medium text-zinc-700 transition-colors hover:bg-zinc-100/80 dark:text-zinc-200 dark:hover:bg-zinc-700/50"
                 >
                   {opt.label}
                 </button>
@@ -67,11 +67,11 @@ function StatusLight(): JSX.Element {
   const isRunning = agentStatus === "running" || agentStatus === "thinking" || agentStatus === "processing";
   const isError = agentStatus === "error";
   const bg = isRunning ? "bg-sky-400" : isError ? "bg-rose-400" : "bg-emerald-400";
-  const shadow = isRunning ? "shadow-[0_0_8px_rgba(56,189,248,0.5)]" : isError ? "shadow-[0_0_6px_rgba(251,113,133,0.4)]" : "shadow-[0_0_6px_rgba(52,211,153,0.4)]";
+  const shadow = isRunning ? "shadow-[0_0_6px_rgba(56,189,248,0.5)]" : isError ? "shadow-[0_0_5px_rgba(251,113,133,0.4)]" : "shadow-[0_0_5px_rgba(52,211,153,0.4)]";
 
   return (
-    <div className="flex flex-col items-center justify-center gap-1">
-      <div className={`h-3 w-3 rounded-full ${bg} ${shadow} ${isRunning ? "animate-pulse" : ""}`} />
+    <div className="flex items-center gap-1.5">
+      <div className={`h-2 w-2 rounded-full ${bg} ${shadow} ${isRunning ? "animate-pulse" : ""}`} />
       <span className="text-[10px] uppercase tracking-wider text-zinc-400 dark:text-zinc-500 font-medium">
         {agentStatus}
       </span>
@@ -99,15 +99,15 @@ export function MainView(): JSX.Element {
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -10 }}
       transition={{ duration: 0.42, ease: "easeOut" }}
-      className="mx-auto flex h-full w-full max-w-7xl flex-col gap-4 p-4"
+      className="mx-auto flex h-full w-full max-w-7xl flex-col gap-3 px-4 py-3"
     >
-      {/* Top Header */}
-      <div className="flex items-start justify-between gap-4 border-b border-black/5 pb-3 dark:border-white/5">
-        <div className="min-w-0">
-          <p className="mb-2 truncate text-xs font-medium text-zinc-500/85 dark:text-zinc-400/85">
-            当前工程：{projectPath ?? "未选择"}
-          </p>
+      {/* Top Header — 单行紧凑：Agent 选择 + 工程路径 + 状态灯 */}
+      <div className="flex items-center justify-between gap-3 border-b border-black/5 pb-1.5 dark:border-white/5">
+        <div className="flex min-w-0 items-center gap-2">
           <AgentSelector />
+          <span className="truncate text-[11px] text-zinc-500/85 dark:text-zinc-400/85">
+            {projectPath ?? "未选择工程"}
+          </span>
         </div>
         <StatusLight />
       </div>
