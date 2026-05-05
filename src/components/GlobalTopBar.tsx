@@ -3,14 +3,16 @@ import { invoke } from "@tauri-apps/api/core";
 import type { MouseEvent } from "react";
 import { useAppStore } from "../stores/useAppStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
+import { useActiveTab, useActiveTabActions } from "../hooks/useActiveTab";
 
 export function GlobalTopBar(): JSX.Element {
   const theme = useAppStore((s) => s.theme);
   const toggleTheme = useAppStore((s) => s.toggleTheme);
-  const uiState = useAppStore((s) => s.uiState);
-  const resetSession = useAppStore((s) => s.resetSession);
   const addLogEntry = useAppStore((s) => s.addLogEntry);
   const openSettingsModal = useSettingsStore((s) => s.openSettingsModal);
+  const tab = useActiveTab();
+  const { activeTabId, reset } = useActiveTabActions();
+  const uiState = tab.uiState;
   const appWindow = getCurrentWindow();
 
   const handleDragMouseDown = async (event: MouseEvent<HTMLDivElement>): Promise<void> => {
@@ -22,11 +24,15 @@ export function GlobalTopBar(): JSX.Element {
     }
   };
 
-  const handleStop = async () => {
+  const handleStop = async (): Promise<void> => {
     try {
-      await invoke("stop_agent", {});
-      resetSession();
-      addLogEntry({ timestamp: Date.now(), level: "info", message: "已停止 Agent。" });
+      // 多 tab：只停当前 tab 的会话；其他 tab 的并发 turn 不受影响
+      await invoke("stop_agent", {
+        runId: activeTabId,
+        sessionId: tab.sessionId,
+      });
+      reset();
+      addLogEntry({ timestamp: Date.now(), level: "info", message: "已停止当前 tab 的 Agent。" });
     } catch (err) {
       addLogEntry({ timestamp: Date.now(), level: "error", message: `stop: ${String(err)}` });
     }

@@ -1,10 +1,11 @@
-import { useAppStore } from "../../stores/useAppStore";
+import { useActiveTab } from "../../hooks/useActiveTab";
 import { motion, AnimatePresence } from "framer-motion";
 
 export function RunningBubble(): JSX.Element {
-  const bubble = useAppStore((s) => s.bubble);
-  const uiState = useAppStore((s) => s.uiState);
-  const mode = useAppStore((s) => s.mode);
+  const tab = useActiveTab();
+  const bubble = tab.bubble;
+  const uiState = tab.uiState;
+  const mode = tab.mode;
   const isVisible = uiState === "running" || mode === "thinking" || mode === "working";
 
   return (

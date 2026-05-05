@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { useAppStore } from "../../stores/useAppStore";
+import { useActiveTab } from "../../hooks/useActiveTab";
 import type { AgentStatus } from "../../types/agent";
 
 const OTHERS_GIFS: string[] = [
@@ -48,9 +48,10 @@ const THINKING_STATUSES: ReadonlySet<AgentStatus> = new Set<AgentStatus>([
 ]);
 
 export function PetCharacter(): JSX.Element {
-  const uiState = useAppStore((s) => s.uiState);
-  const agentStatus = useAppStore((s) => s.agentStatus);
-  const mode = useAppStore((s) => s.mode);
+  const tab = useActiveTab();
+  const uiState = tab.uiState;
+  const agentStatus = tab.agentStatus;
+  const mode = tab.mode;
 
   const visualState = useMemo(
     () => getVisualState(uiState, mode, agentStatus),

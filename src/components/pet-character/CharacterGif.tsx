@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useAppStore } from "../../stores/useAppStore";
+import { useActiveTabField } from "../../hooks/useActiveTab";
 
 const PET_GIF_MAP: Record<string, string[]> = {
   init: ["/pet/thinking/thinking_1.gif"],
@@ -11,7 +11,7 @@ const PET_GIF_MAP: Record<string, string[]> = {
 };
 
 export function CharacterGif(): JSX.Element {
-  const lastStage = useAppStore((s) => s.lastStage);
+  const lastStage = useActiveTabField("lastStage");
 
   const src = useMemo(() => {
     const candidates = PET_GIF_MAP[lastStage] ?? PET_GIF_MAP.default;

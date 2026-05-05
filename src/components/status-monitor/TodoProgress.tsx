@@ -1,8 +1,8 @@
 import { motion } from "framer-motion";
-import { useAppStore } from "../../stores/useAppStore";
+import { useActiveTabField } from "../../hooks/useActiveTab";
 
 export function TodoProgress(): JSX.Element {
-  const percent = useAppStore((s) => s.percent);
+  const percent = useActiveTabField("percent");
 
   return (
     <motion.div

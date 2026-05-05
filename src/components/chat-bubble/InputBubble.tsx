@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../../stores/useAppStore";
 import { useSettingsStore } from "../../stores/useSettingsStore";
+import { useActiveTab, useActiveTabActions } from "../../hooks/useActiveTab";
 
 const GREETINGS = [
   "喂，[称呼]，发什么呆呢？今天的部团活动要开始咯，有什么有趣的企划快交上来看看。",
@@ -15,20 +16,17 @@ const GREETINGS = [
 export function InputBubble(): JSX.Element {
   const nickname = useSettingsStore((s) => s.nickname);
   const displayNickname = nickname.trim() ? nickname : "部员";
-
-  const projectPath = useAppStore((s) => s.projectPath);
-  const agentStatus = useAppStore((s) => s.agentStatus);
-  const setUiState = useAppStore((s) => s.setUiState);
-  const setMode = useAppStore((s) => s.setMode);
-  const setAgentStatus = useAppStore((s) => s.setAgentStatus);
-  const setSessionId = useAppStore((s) => s.setSessionId);
-  const setPercent = useAppStore((s) => s.setPercent);
   const addLogEntry = useAppStore((s) => s.addLogEntry);
+
+  const tab = useActiveTab();
+  const { activeTabId, update } = useActiveTabActions();
+
+  const projectPath = tab.projectPath;
+  const agentStatus = tab.agentStatus;
+  const task = tab.task;
 
   const [greeting, setGreeting] = useState("");
   const [displayedGreeting, setDisplayedGreeting] = useState("");
-  const task = useAppStore((s) => s.task);
-  const setTask = useAppStore((s) => s.setTask);
 
   useEffect(() => {
     if (agentStatus === "idle") {
@@ -53,26 +51,32 @@ export function InputBubble(): JSX.Element {
     return () => clearInterval(intervalId);
   }, [greeting, agentStatus]);
 
-  const handleLaunch = async () => {
-    if (!task.trim()) return;
-    const selectedAgent = useAppStore.getState().selectedAgent;
+  const handleLaunch = async (): Promise<void> => {
+    if (!task.trim() || !activeTabId) return;
     try {
-      // 先清掉上一轮 sessionId 再 invoke——avoid 上一轮的 session-complete
-      // 路由到本轮事件处理
-      setSessionId(null);
-      setPercent(0);
-      setUiState("running");
-      setMode("working");
-      setAgentStatus("running");
+      // 重置该 tab 的会话级字段（保留 task / agent / projectPath / title）；
+      // 然后置 running 状态、清掉 sessionId（让 IPC 早期事件按 fallback 路由进来）
+      update({
+        sessionId: null,
+        percent: 0,
+        uiState: "running",
+        mode: "working",
+        agentStatus: "running",
+        cliBlocks: [],
+        resultZh: "",
+        summaryTranslation: "",
+        emotionText: "",
+        suggestionOptions: [],
+      });
+
       const res = await invoke<{ sessionId?: string }>("start_agent", {
         userInputZh: task,
         cwd: projectPath || ".",
-        agent: selectedAgent,
+        agent: tab.agent,
+        runId: activeTabId,
       });
-      // 把后端返回的 sessionId 写回 store，让 useAgentIPC 的 forSession 能匹配
-      // 后续 status-changed / session-complete 事件
       if (res?.sessionId) {
-        setSessionId(res.sessionId);
+        update({ sessionId: res.sessionId });
       }
     } catch (err) {
       addLogEntry({
@@ -80,9 +84,11 @@ export function InputBubble(): JSX.Element {
         level: "error",
         message: `launch err: ${String(err)}`,
       });
-      setUiState("error");
-      setMode("error");
-      setAgentStatus("error");
+      update({
+        uiState: "error",
+        mode: "error",
+        agentStatus: "error",
+      });
     }
   };
 
@@ -118,13 +124,13 @@ export function InputBubble(): JSX.Element {
 
             <textarea
               value={task}
-              onChange={(e) => setTask(e.target.value)}
+              onChange={(e) => update({ task: e.target.value })}
               placeholder="和团长对话……"
               className="min-h-[100px] w-full resize-none rounded-xl border border-black/5 bg-white/50 p-3.5 text-sm text-zinc-800 outline-none transition-all placeholder:text-zinc-400 focus:border-sky-400/50 focus:bg-white/80 focus:ring-2 focus:ring-sky-400/15 dark:border-white/5 dark:bg-slate-900/40 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-sky-400/40 dark:focus:bg-slate-900/60 dark:focus:ring-sky-400/10"
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
-                  handleLaunch();
+                  void handleLaunch();
                 }
               }}
             />
@@ -133,7 +139,7 @@ export function InputBubble(): JSX.Element {
               <motion.button
                 whileHover={{ scale: 1.02, y: -1 }}
                 whileTap={{ scale: 0.98 }}
-                onClick={handleLaunch}
+                onClick={() => void handleLaunch()}
                 disabled={!task.trim()}
                 className="rounded-xl bg-sky-500 px-6 py-2.5 text-sm font-semibold tracking-wide text-white shadow-md shadow-sky-400/25 transition-all hover:bg-sky-600 hover:shadow-sky-400/40 active:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
               >

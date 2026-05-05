@@ -1,58 +1,63 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../../stores/useAppStore";
+import { useActiveTab, useActiveTabActions } from "../../hooks/useActiveTab";
 import { motion, AnimatePresence } from "framer-motion";
 
 export function ResultCard(): JSX.Element {
-  const mode = useAppStore((s) => s.mode);
-  const uiState = useAppStore((s) => s.uiState);
-  const emotionText = useAppStore((s) => s.emotionText);
-  const summaryTranslation = useAppStore((s) => s.summaryTranslation);
-  const suggestionOptions = useAppStore((s) => s.suggestionOptions);
-  const setTask = useAppStore((s) => s.setTask);
-  const setUiState = useAppStore((s) => s.setUiState);
-  const setMode = useAppStore((s) => s.setMode);
-  const setAgentStatus = useAppStore((s) => s.setAgentStatus);
-  const setSessionId = useAppStore((s) => s.setSessionId);
-  const setPercent = useAppStore((s) => s.setPercent);
-  const setResultZh = useAppStore((s) => s.setResultZh);
-  const setSummaryTranslation = useAppStore((s) => s.setSummaryTranslation);
-  const setEmotionText = useAppStore((s) => s.setEmotionText);
-  const setSuggestionOptions = useAppStore((s) => s.setSuggestionOptions);
+  const tab = useActiveTab();
+  const { activeTabId, update } = useActiveTabActions();
   const addLogEntry = useAppStore((s) => s.addLogEntry);
 
-  const isVisible = uiState === "done" || uiState === "error" || mode === "complete" || mode === "suggestion" || mode === "error";
+  const mode = tab.mode;
+  const uiState = tab.uiState;
+  const emotionText = tab.emotionText;
+  const summaryTranslation = tab.summaryTranslation;
+  const suggestionOptions = tab.suggestionOptions;
+
+  const isVisible =
+    uiState === "done" ||
+    uiState === "error" ||
+    mode === "complete" ||
+    mode === "suggestion" ||
+    mode === "error";
 
   /// 点选项 = 立即启动新一轮（不回 idle，避免 InputBubble 还没显示就把上一轮的
-  /// 状态条都清掉造成"白屏"）
-  const handleOptionClick = async (opt: string) => {
-    setTask(opt);
-    setSessionId(null);
-    setPercent(0);
-    setResultZh("");
-    setSummaryTranslation("");
-    setEmotionText("");
-    setSuggestionOptions([]);
-    setUiState("running");
-    setMode("working");
-    setAgentStatus("running");
+  /// 状态条都清掉造成"白屏"）。仍然在同一个 tab 内继续，只是清空上一轮结果。
+  const handleOptionClick = async (opt: string): Promise<void> => {
+    if (!activeTabId) return;
+    update({
+      task: opt,
+      sessionId: null,
+      percent: 0,
+      resultZh: "",
+      summaryTranslation: "",
+      emotionText: "",
+      suggestionOptions: [],
+      cliBlocks: [],
+      uiState: "running",
+      mode: "working",
+      agentStatus: "running",
+    });
 
-    const { selectedAgent, projectPath } = useAppStore.getState();
     try {
       const res = await invoke<{ sessionId?: string }>("start_agent", {
         userInputZh: opt,
-        cwd: projectPath || ".",
-        agent: selectedAgent,
+        cwd: tab.projectPath || ".",
+        agent: tab.agent,
+        runId: activeTabId,
       });
-      if (res?.sessionId) setSessionId(res.sessionId);
+      if (res?.sessionId) update({ sessionId: res.sessionId });
     } catch (err) {
       addLogEntry({
         timestamp: Date.now(),
         level: "error",
         message: `launch err: ${String(err)}`,
       });
-      setUiState("error");
-      setMode("error");
-      setAgentStatus("error");
+      update({
+        uiState: "error",
+        mode: "error",
+        agentStatus: "error",
+      });
     }
   };
 
@@ -108,7 +113,7 @@ export function ResultCard(): JSX.Element {
                 {suggestionOptions.map((opt, i) => (
                   <button
                     key={i}
-                    onClick={() => handleOptionClick(opt)}
+                    onClick={() => void handleOptionClick(opt)}
                     className="flex items-center rounded-full border border-white/40 bg-white/50 px-3.5 py-1.5 text-xs font-semibold text-zinc-700 shadow-sm backdrop-blur-sm transition-all hover:-translate-y-0.5 hover:bg-white hover:text-zinc-900 hover:shadow-md active:translate-y-0 active:scale-95 dark:border-white/10 dark:bg-slate-700/50 dark:text-zinc-300 dark:hover:bg-slate-600 dark:hover:text-white"
                   >
                     {opt}

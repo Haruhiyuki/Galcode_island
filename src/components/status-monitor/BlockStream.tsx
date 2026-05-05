@@ -15,7 +15,7 @@
 
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useAppStore } from "../../stores/useAppStore";
+import { useActiveTabField } from "../../hooks/useActiveTab";
 import type { CliBlock } from "../../types/blocks";
 
 /// Markdown 渲染——Agent 输出常含 **bold** / `code` / 代码块 / 列表 / 表格 / 链接。
@@ -324,7 +324,7 @@ function BlockRenderer({ block }: { block: CliBlock }): JSX.Element | null {
 }
 
 export function BlockStream(): JSX.Element | null {
-  const blocks = useAppStore((s) => s.cliBlocks);
+  const blocks = useActiveTabField("cliBlocks");
 
   if (blocks.length === 0) return null;
 

@@ -1,22 +1,23 @@
 // 订阅 `galcode://cli-output` 事件，把后端 emit 的 block JSON 归一成
-// 统一的 CliBlock 列表，写到 useAppStore.cliBlocks（全局 store）。
+// CliBlock 写到对应 tab 的 cliBlocks。
 //
 // **关键**：这个 hook 只在 App 顶层 mount 一次，listener 永久有效。
 // 之前在 BlockStream 里 mount，组件随 StatusMonitor 显示/隐藏反复重建
 // listener，会丢早到的事件。
+//
+// 多 tab 路由：CliStreamEvent.runId 直接是 tab.id；找不到对应 tab 时
+// 兜底通过 streamId 反查（streamId 格式 `stream-{sessionId}`，前端从
+// tab.sessionId 推导）。再找不到只剩单 tab fallback（同 useAgentIPC）。
 //
 // 流式 update 模式：
 //   - text/thought/agentMessage 等增量类 block：后端发一连串同 id 的更新，content
 //     是累积后的完整文本，前端直接 upsert（覆盖前一个）
 //   - command output delta：output 字段累积更新
 //   - todo：items 数组覆盖
-//
-// sessionId 切换时清空旧 blocks（在 InputBubble.handleLaunch 里 setSessionId(null)
-// 触发，下面的 store subscriber 会自动 clearCliBlocks）。
 
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { useEffect, useRef } from "react";
-import { useAppStore } from "../stores/useAppStore";
+import { useEffect } from "react";
+import { useTabsStore } from "../stores/useTabsStore";
 import type { CliBlock, CliStreamEvent } from "../types/blocks";
 
 let stderrCounter = 0;
@@ -75,19 +76,25 @@ function normalizeBlock(parsed: unknown): CliBlock | null {
   return null;
 }
 
+/// 多 tab 路由：runId → tab.id 直接对应；没拿到 runId 时通过 streamId
+/// 反查（streamId = `stream-{sessionId}`）；都没命中走单 tab 兜底。
+function resolveTabId(runId: string, streamId: string): string | null {
+  const store = useTabsStore.getState();
+  if (runId && store.tabs[runId]) return runId;
+
+  if (streamId && streamId.startsWith("stream-")) {
+    const sessionId = streamId.slice("stream-".length);
+    const byId = store.findTabBySessionId(sessionId);
+    if (byId) return byId;
+  }
+
+  // 单 tab 兜底
+  if (store.order.length === 1) return store.order[0];
+  return null;
+}
+
 /// 在 App 顶层挂一次。
 export function useCliStream(): void {
-  const sessionIdRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    return useAppStore.subscribe((state) => {
-      if (state.sessionId !== sessionIdRef.current) {
-        sessionIdRef.current = state.sessionId;
-        useAppStore.getState().clearCliBlocks();
-      }
-    });
-  }, []);
-
   useEffect(() => {
     const unsubs: UnlistenFn[] = [];
     const run = async () => {
@@ -96,21 +103,23 @@ export function useCliStream(): void {
         const payload = e.payload;
         if (!payload?.line) return;
 
-        console.log(
-          "[cli-stream]",
-          payload.backend,
-          payload.channel,
-          "len:",
-          payload.line.length,
-          "preview:",
-          payload.line.slice(0, 100)
-        );
+        const tabId = resolveTabId(payload.runId ?? "", payload.streamId ?? "");
+        if (!tabId) {
+          console.warn(
+            "[cli-stream] dropped, no tab match",
+            "runId=", payload.runId,
+            "streamId=", payload.streamId,
+          );
+          return;
+        }
+
+        const tabs = useTabsStore.getState();
 
         if (payload.channel === "stderr") {
           const trimmed = payload.line.trim();
           if (!trimmed) return;
           stderrCounter += 1;
-          useAppStore.getState().appendCliBlock({
+          tabs.appendCliBlock(tabId, {
             id: `stderr-${payload.streamId || payload.backend}-${stderrCounter}`,
             type: "stderr",
             backend: payload.backend,
@@ -128,17 +137,12 @@ export function useCliStream(): void {
         }
 
         const block = normalizeBlock(parsed);
-        if (!block) {
-          const t = (parsed as { type?: string })?.type;
-          if (t) console.log("[cli-stream] skipped JSON, top type=", t);
-          return;
-        }
+        if (!block) return;
 
-        console.log("[cli-stream] block accepted:", block.type, block.id);
         if (block.type === "thought") {
-          useAppStore.getState().setMode("thinking");
+          tabs.updateTab(tabId, { mode: "thinking" });
         }
-        useAppStore.getState().upsertCliBlock(block);
+        tabs.upsertCliBlock(tabId, block);
       });
       unsubs.push(unsub);
     };

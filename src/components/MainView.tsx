@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useState } from "react";
 import { useAppStore } from "../stores/useAppStore";
+import { useActiveTab, useActiveTabActions } from "../hooks/useActiveTab";
 import { PetCharacter } from "./pet-character/PetCharacter";
 import type { AgentType } from "../types/agent";
 
@@ -9,8 +10,11 @@ import { ResultCard } from "./chat-bubble/ResultCard";
 import { RunningBubble } from "./chat-bubble/RunningBubble";
 import { StatusMonitor } from "./status-monitor/StatusMonitor";
 
+/// 切换当前 tab 用的 backend。
+/// 同时同步到 useAppStore.selectedAgent 作为下次新建 tab 的默认值。
 function AgentSelector(): JSX.Element {
-  const selectedAgent = useAppStore((s) => s.selectedAgent);
+  const tab = useActiveTab();
+  const { update } = useActiveTabActions();
   const setSelectedAgent = useAppStore((s) => s.setSelectedAgent);
   const [isOpen, setIsOpen] = useState(false);
 
@@ -19,7 +23,7 @@ function AgentSelector(): JSX.Element {
     { value: "opencode", label: "OpenCode" },
     { value: "codex", label: "Codex" },
   ];
-  const selectedLabel = options.find((o) => o.value === selectedAgent)?.label ?? "Claude Code";
+  const selectedLabel = options.find((o) => o.value === tab.agent)?.label ?? "Claude Code";
 
   return (
     <div className="relative inline-block text-left">
@@ -46,6 +50,7 @@ function AgentSelector(): JSX.Element {
                 <button
                   key={opt.value}
                   onClick={() => {
+                    update({ agent: opt.value });
                     setSelectedAgent(opt.value);
                     setIsOpen(false);
                   }}
@@ -63,7 +68,7 @@ function AgentSelector(): JSX.Element {
 }
 
 function StatusLight(): JSX.Element {
-  const agentStatus = useAppStore((s) => s.agentStatus);
+  const agentStatus = useActiveTab().agentStatus;
   const isRunning = agentStatus === "running" || agentStatus === "thinking" || agentStatus === "processing";
   const isError = agentStatus === "error";
   const bg = isRunning ? "bg-sky-400" : isError ? "bg-rose-400" : "bg-emerald-400";
@@ -80,13 +85,12 @@ function StatusLight(): JSX.Element {
 }
 
 export function MainView(): JSX.Element {
-  const projectPath = useAppStore((s) => s.projectPath);
-  const uiState = useAppStore((s) => s.uiState);
-  const mode = useAppStore((s) => s.mode);
-  const cliBlockCount = useAppStore((s) => s.cliBlocks.length);
+  const tab = useActiveTab();
+  const projectPath = tab.projectPath;
+  const uiState = tab.uiState;
+  const mode = tab.mode;
+  const cliBlockCount = tab.cliBlocks.length;
   // 完成后保留 StatusMonitor 让 BlockStream 历史可见，跟 ResultCard 共存。
-  // 下一轮提交时 InputBubble.handleLaunch 会 setSessionId(null) → useCliStream
-  // 自动 clearCliBlocks，StatusMonitor 显示空占位再开始新一轮累积。
   const showStatus =
     uiState === "running" ||
     mode === "working" ||

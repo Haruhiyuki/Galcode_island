@@ -2,8 +2,15 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useState } from "react";
 import { useAppStore } from "../../stores/useAppStore";
+import { useTabsStore } from "../../stores/useTabsStore";
 import { PetCharacter } from "../pet-character/PetCharacter";
 import type { AgentType } from "../../types/agent";
+
+function deriveTabTitleFromPath(path: string | null): string {
+  if (!path) return "新会话";
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || path;
+}
 
 const agentOptions = [
   { value: "claude-code", label: "Claude Code" },
@@ -35,14 +42,20 @@ const charVariants = {
 };
 
 export function WelcomeView(): JSX.Element {
-  const projectPath = useAppStore((s) => s.projectPath);
+  // WelcomeView 用 useState 暂存用户选的项目路径 + 默认 agent；
+  // 点"启动"时才创建第一个 tab（把这两个值塞进 TabState），然后切到主界面。
+  // 这样 useAppStore 不再需要全局 projectPath 字段。
   const selectedAgent = useAppStore((s) => s.selectedAgent);
-  const setProjectPath = useAppStore((s) => s.setProjectPath);
   const setSelectedAgent = useAppStore((s) => s.setSelectedAgent);
   const setIsStarted = useAppStore((s) => s.setIsStarted);
+  const createTab = useTabsStore((s) => s.createTab);
+  const setActiveTab = useTabsStore((s) => s.setActiveTab);
 
+  const [pendingProjectPath, setPendingProjectPath] = useState<string | null>(null);
   const [isSelecting, setIsSelecting] = useState(false);
   const [isAgentMenuOpen, setIsAgentMenuOpen] = useState(false);
+
+  const projectPath = pendingProjectPath;
 
   const selectedAgentLabel =
     agentOptions.find((o) => o.value === selectedAgent)?.label ?? "Claude Code";
@@ -53,19 +66,25 @@ export function WelcomeView(): JSX.Element {
       const result = await open({ directory: true });
       if (!result) return;
       const path = Array.isArray(result) ? result[0] : result;
-      setProjectPath(path);
+      setPendingProjectPath(path);
     } finally {
       setIsSelecting(false);
     }
-  }, [setProjectPath]);
+  }, []);
 
   const handlePrimaryAction = useCallback(async (): Promise<void> => {
     if (!projectPath) {
       await pickProjectFolder();
       return;
     }
+    const id = createTab({
+      title: deriveTabTitleFromPath(projectPath),
+      agent: selectedAgent,
+      projectPath,
+    });
+    setActiveTab(id);
     setIsStarted(true);
-  }, [projectPath, pickProjectFolder, setIsStarted]);
+  }, [projectPath, pickProjectFolder, createTab, setActiveTab, selectedAgent, setIsStarted]);
 
   const actionLabel = projectPath ? "启动" : "选择项目";
   const isReady = Boolean(projectPath);

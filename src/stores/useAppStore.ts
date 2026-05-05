@@ -1,14 +1,18 @@
+// 应用全局 store —— 只放真正全局的字段。
+//
+// 多 tab 重构后，所有"会话级"字段（task / sessionId / cliBlocks / mode /
+// uiState / agentStatus / bubble / percent / resultZh / summaryTranslation /
+// emotionText / suggestionOptions / lastStage / projectPath）都搬到了
+// `useTabsStore` 的 TabState 里，每个 tab 一份。
+//
+// 留在这里的全局字段：
+//   - currentView / isStarted：导航
+//   - theme：dark/light
+//   - selectedAgent：**新建 tab 时的默认 agent**（不是当前 tab 的 agent —— 那个在 TabState）
+//   - logEntries：跨 tab 共享的诊断日志栏
+
 import { create } from "zustand";
-import type {
-  AgentStatus,
-  AgentTab,
-  AgentType,
-  LastStage,
-  LogEntry,
-  TodoItem,
-  UiState,
-} from "../types/agent";
-import type { CliBlock } from "../types/blocks";
+import type { AgentType, LogEntry } from "../types/agent";
 
 export type ThemeMode = "light" | "dark";
 export type AppView = "welcome" | "main" | "settings";
@@ -16,57 +20,22 @@ export type AppView = "welcome" | "main" | "settings";
 interface AppState {
   currentView: AppView;
   isStarted: boolean;
+  /// 新建 tab 时的默认 backend；当前 tab 在用哪个 agent 看 TabState.agent。
+  /// WelcomeView 用户选 agent → 创建第一个 tab 时拿这个值；
+  /// MainView 顶部的 AgentSelector 改的是 active tab 的 agent，会一并写回这里
+  /// 作为下次新 tab 的默认。
   selectedAgent: AgentType;
-  agentStatus: AgentStatus;
-  activeAgentTab: AgentTab;
-  projectPath: string | null;
-  todos: TodoItem[];
-  logEntries: LogEntry[];
   theme: ThemeMode;
+  /// 跨 tab 共享的诊断日志（错误 / 系统提示）；不影响业务。
+  logEntries: LogEntry[];
 
-  // Runtime state (from agent IPC)
-  task: string;
-  uiState: UiState;
-  percent: number;
-  bubble: string;
-  sessionId: string | null;
-  resultZh: string;
-  mode: string;
-  summaryTranslation: string;
-  emotionText: string;
-  suggestionOptions: string[];
-  lastStage: LastStage;
-
-  // CLI 流式 block —— useCliStream 在 App 顶层订阅，blocks 写到这里，
-  // BlockStream 等组件只读不写，避免组件 mount/unmount 反复注册 listener。
-  cliBlocks: CliBlock[];
-
-  // Actions
   setCurrentView: (view: AppView) => void;
   setIsStarted: (isStarted: boolean) => void;
-  setProjectPath: (path: string | null) => void;
   setSelectedAgent: (agent: AgentType) => void;
-  setAgentStatus: (status: AgentStatus) => void;
-  setActiveAgentTab: (tab: AgentTab) => void;
   setTheme: (theme: ThemeMode) => void;
   toggleTheme: () => void;
-  setTask: (task: string) => void;
-  setUiState: (uiState: UiState) => void;
-  setPercent: (percent: number) => void;
-  setBubble: (bubble: string) => void;
-  setSessionId: (sessionId: string | null) => void;
-  setResultZh: (resultZh: string) => void;
-  setMode: (mode: string) => void;
-  setSummaryTranslation: (summaryTranslation: string) => void;
-  setEmotionText: (emotionText: string) => void;
-  setSuggestionOptions: (options: string[]) => void;
-  setLastStage: (lastStage: LastStage) => void;
   addLogEntry: (entry: LogEntry) => void;
   clearLogs: () => void;
-  resetSession: () => void;
-  appendCliBlock: (block: CliBlock) => void;
-  upsertCliBlock: (block: CliBlock) => void;
-  clearCliBlocks: () => void;
 }
 
 const getSystemTheme = (): ThemeMode => {
@@ -90,32 +59,12 @@ export const useAppStore = create<AppState>((set) => ({
   currentView: "welcome",
   isStarted: false,
   selectedAgent: "claude-code",
-  agentStatus: "idle",
-  activeAgentTab: "claude-code",
-  projectPath: null,
-  todos: [],
-  logEntries: [],
   theme: initialTheme,
-
-  task: "",
-  uiState: "idle",
-  percent: 0,
-  bubble: "嗨，我是春日桌宠！输入中文任务，我会调用 Demo Agent。",
-  sessionId: null,
-  resultZh: "",
-  mode: "idle",
-  summaryTranslation: "",
-  emotionText: "",
-  suggestionOptions: [],
-  lastStage: "default",
-  cliBlocks: [],
+  logEntries: [],
 
   setCurrentView: (view) => set({ currentView: view }),
   setIsStarted: (isStarted) => set({ isStarted }),
-  setProjectPath: (projectPath) => set({ projectPath }),
   setSelectedAgent: (selectedAgent) => set({ selectedAgent }),
-  setAgentStatus: (agentStatus) => set({ agentStatus }),
-  setActiveAgentTab: (activeAgentTab) => set({ activeAgentTab }),
   setTheme: (theme) => {
     applyTheme(theme);
     set({ theme });
@@ -126,51 +75,9 @@ export const useAppStore = create<AppState>((set) => ({
       applyTheme(nextTheme);
       return { theme: nextTheme };
     }),
-  setTask: (task) => set({ task }),
-  setUiState: (uiState) => set({ uiState }),
-  setPercent: (percent) => set({ percent }),
-  setBubble: (bubble) => set({ bubble }),
-  setSessionId: (sessionId) => set({ sessionId }),
-  setResultZh: (resultZh) => set({ resultZh }),
-  setMode: (mode) => set({ mode }),
-  setSummaryTranslation: (summaryTranslation) => set({ summaryTranslation }),
-  setEmotionText: (emotionText) => set({ emotionText }),
-  setSuggestionOptions: (suggestionOptions) => set({ suggestionOptions }),
-  setLastStage: (lastStage) => set({ lastStage }),
   addLogEntry: (entry) =>
     set((state) => ({
       logEntries: [...state.logEntries.slice(-79), entry],
     })),
   clearLogs: () => set({ logEntries: [] }),
-  appendCliBlock: (block) =>
-    set((state) => {
-      const next = [...state.cliBlocks, block];
-      return { cliBlocks: next.length > 200 ? next.slice(-180) : next };
-    }),
-  upsertCliBlock: (block) =>
-    set((state) => {
-      const idx = state.cliBlocks.findIndex((b) => b.id === block.id);
-      if (idx >= 0) {
-        const next = state.cliBlocks.slice();
-        next[idx] = { ...next[idx], ...block };
-        return { cliBlocks: next };
-      }
-      const next = [...state.cliBlocks, block];
-      return { cliBlocks: next.length > 200 ? next.slice(-180) : next };
-    }),
-  clearCliBlocks: () => set({ cliBlocks: [] }),
-  resetSession: () =>
-    set({
-      percent: 0,
-      bubble: "",
-      resultZh: "",
-      mode: "idle",
-      summaryTranslation: "",
-      emotionText: "",
-      suggestionOptions: [],
-      lastStage: "default",
-      uiState: "idle",
-      agentStatus: "idle",
-      sessionId: null,
-    }),
 }));

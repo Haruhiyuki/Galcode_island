@@ -1,9 +1,10 @@
 import { useMemo } from "react";
-import { useAppStore } from "../../stores/useAppStore";
+import { useActiveTab } from "../../hooks/useActiveTab";
 
 export function AgentStatusBadge(): JSX.Element {
-  const uiState = useAppStore((s) => s.uiState);
-  const sessionId = useAppStore((s) => s.sessionId);
+  const tab = useActiveTab();
+  const uiState = tab.uiState;
+  const sessionId = tab.sessionId;
 
   const color = useMemo(() => {
     switch (uiState) {
