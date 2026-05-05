@@ -13,8 +13,87 @@
 // 用 AnimatePresence 让新增 / 移除带过渡，但避免每次 update 都触发动画
 // （update 是同 id，AnimatePresence 不会重放 enter）。
 
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { useAppStore } from "../../stores/useAppStore";
 import type { CliBlock } from "../../types/blocks";
+
+/// Markdown 渲染——Agent 输出常含 **bold** / `code` / 代码块 / 列表 / 表格 / 链接。
+/// 流式中可能 markdown 不闭合（比如 ``` 还没收尾），react-markdown 会自动容错降级。
+const MD_COMPONENTS: Parameters<typeof ReactMarkdown>[0]["components"] = {
+  h1: ({ children }) => <h1 className="my-1 text-sm font-bold">{children}</h1>,
+  h2: ({ children }) => <h2 className="my-1 text-[13px] font-bold">{children}</h2>,
+  h3: ({ children }) => <h3 className="my-0.5 text-xs font-semibold">{children}</h3>,
+  h4: ({ children }) => <h4 className="my-0.5 text-xs font-semibold">{children}</h4>,
+  p: ({ children }) => <p className="my-1">{children}</p>,
+  ul: ({ children }) => <ul className="my-1 ml-4 list-disc space-y-0.5">{children}</ul>,
+  ol: ({ children }) => <ol className="my-1 ml-4 list-decimal space-y-0.5">{children}</ol>,
+  li: ({ children }) => <li>{children}</li>,
+  code: ({ className, children, ...props }) => {
+    const isInline = !(className && /^language-/.test(className));
+    if (isInline) {
+      return (
+        <code className="rounded bg-zinc-200/60 px-1 py-0.5 font-mono text-[10px] text-rose-700 dark:bg-zinc-800/60 dark:text-rose-300">
+          {children}
+        </code>
+      );
+    }
+    return (
+      <code className={`${className ?? ""} font-mono`} {...props}>
+        {children}
+      </code>
+    );
+  },
+  pre: ({ children }) => (
+    <pre className="my-1 overflow-x-auto rounded-md border border-zinc-700/30 bg-zinc-900/95 p-2 font-mono text-[10px] leading-tight text-zinc-200">
+      {children}
+    </pre>
+  ),
+  a: ({ href, children }) => (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer noopener"
+      className="text-sky-600 underline hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300"
+    >
+      {children}
+    </a>
+  ),
+  blockquote: ({ children }) => (
+    <blockquote className="my-1 border-l-2 border-zinc-300 pl-2 text-zinc-500 dark:border-zinc-600 dark:text-zinc-400">
+      {children}
+    </blockquote>
+  ),
+  strong: ({ children }) => <strong className="font-semibold text-zinc-900 dark:text-zinc-100">{children}</strong>,
+  em: ({ children }) => <em className="italic">{children}</em>,
+  hr: () => <hr className="my-2 border-zinc-200 dark:border-zinc-700" />,
+  table: ({ children }) => (
+    <div className="my-1 overflow-x-auto">
+      <table className="w-full border-collapse border border-zinc-300 dark:border-zinc-700">
+        {children}
+      </table>
+    </div>
+  ),
+  thead: ({ children }) => <thead className="bg-zinc-100/60 dark:bg-zinc-800/40">{children}</thead>,
+  th: ({ children }) => (
+    <th className="border border-zinc-300 px-1.5 py-0.5 text-left font-semibold dark:border-zinc-700">
+      {children}
+    </th>
+  ),
+  td: ({ children }) => (
+    <td className="border border-zinc-300 px-1.5 py-0.5 dark:border-zinc-700">{children}</td>
+  ),
+};
+
+function MarkdownText({ content, className }: { content: string; className?: string }): JSX.Element {
+  return (
+    <div className={`text-xs leading-relaxed ${className ?? ""}`}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+}
 
 function statusBadge(status?: string): { label: string; cls: string } {
   switch (status) {
@@ -40,17 +119,15 @@ function TextBlock({ block }: { block: CliBlock }): JSX.Element | null {
   if (!content) return null;
   const accent =
     block.tone === "file" ? "text-sky-700 dark:text-sky-300" : "text-zinc-800 dark:text-zinc-100";
-  return (
-    <div className={`whitespace-pre-wrap text-xs leading-relaxed ${accent}`}>{content}</div>
-  );
+  return <MarkdownText content={content} className={accent} />;
 }
 
 function ThoughtBlock({ block }: { block: CliBlock }): JSX.Element | null {
   const content = block.content?.trim();
   if (!content) return null;
   return (
-    <div className="rounded-md border-l-2 border-zinc-300 bg-zinc-100/40 px-2 py-1 font-mono text-[11px] leading-relaxed text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800/30 dark:text-zinc-400">
-      {content}
+    <div className="rounded-md border-l-2 border-zinc-300 bg-zinc-100/40 px-2 py-1 text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800/30 dark:text-zinc-400">
+      <MarkdownText content={content} className="text-zinc-500 dark:text-zinc-400" />
     </div>
   );
 }
