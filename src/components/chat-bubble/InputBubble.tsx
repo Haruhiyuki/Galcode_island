@@ -52,7 +52,7 @@ export function InputBubble(): JSX.Element {
   }, [greeting, agentStatus]);
 
   const handleLaunch = async (): Promise<void> => {
-    if (!task.trim() || !activeTabId) return;
+    if (!task.trim() || !activeTabId || !projectPath) return;
     try {
       // 重置该 tab 的会话级字段（保留 task / agent / projectPath / title）；
       // 然后置 running 状态、清掉 sessionId（让 IPC 早期事件按 fallback 路由进来）
@@ -135,12 +135,17 @@ export function InputBubble(): JSX.Element {
               }}
             />
 
-            <div className="mt-4 flex justify-end">
+            <div className="mt-4 flex items-center justify-end gap-3">
+              {!projectPath && (
+                <span className="text-[11px] text-amber-600/90 dark:text-amber-300/90">
+                  请先在顶部选择项目目录
+                </span>
+              )}
               <motion.button
                 whileHover={{ scale: 1.02, y: -1 }}
                 whileTap={{ scale: 0.98 }}
                 onClick={() => void handleLaunch()}
-                disabled={!task.trim()}
+                disabled={!task.trim() || !projectPath}
                 className="rounded-xl bg-sky-500 px-6 py-2.5 text-sm font-semibold tracking-wide text-white shadow-md shadow-sky-400/25 transition-all hover:bg-sky-600 hover:shadow-sky-400/40 active:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 启动

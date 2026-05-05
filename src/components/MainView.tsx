@@ -1,5 +1,6 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useAppStore } from "../stores/useAppStore";
 import { useActiveTab, useActiveTabActions } from "../hooks/useActiveTab";
 import { PetCharacter } from "./pet-character/PetCharacter";
@@ -9,6 +10,49 @@ import { InputBubble } from "./chat-bubble/InputBubble";
 import { ResultCard } from "./chat-bubble/ResultCard";
 import { RunningBubble } from "./chat-bubble/RunningBubble";
 import { StatusMonitor } from "./status-monitor/StatusMonitor";
+
+function deriveTitleFromPath(path: string): string {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || path;
+}
+
+/// 顶部"项目路径"按钮：未选时显示"选择项目"，已选时显示路径，点击都能换路径。
+function ProjectPathButton(): JSX.Element {
+  const tab = useActiveTab();
+  const { update } = useActiveTabActions();
+  const projectPath = tab.projectPath;
+
+  const handlePick = async (): Promise<void> => {
+    try {
+      const result = await open({ directory: true });
+      if (!result) return;
+      const path = Array.isArray(result) ? result[0] : result;
+      // 项目路径变了顺便重命名 tab title（用户没改过标题时才更新，避免覆盖手动重命名）
+      const isAutoTitle = !tab.title || tab.title === "新会话" || tab.title === deriveTitleFromPath(tab.projectPath ?? "");
+      update({
+        projectPath: path,
+        title: isAutoTitle ? deriveTitleFromPath(path) : tab.title,
+      });
+    } catch {
+      /* 用户取消 / 平台不支持，忽略 */
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={() => void handlePick()}
+      title={projectPath ? `点击切换项目（当前：${projectPath}）` : "选择项目目录"}
+      className={`truncate rounded px-1.5 py-0.5 text-[11px] transition-colors ${
+        projectPath
+          ? "text-zinc-500/85 hover:bg-black/5 dark:text-zinc-400/85 dark:hover:bg-white/5"
+          : "text-amber-600/90 hover:bg-amber-400/15 dark:text-amber-300/90"
+      }`}
+    >
+      {projectPath ?? "选择项目"}
+    </button>
+  );
+}
 
 /// 切换当前 tab 用的 backend。
 /// 同时同步到 useAppStore.selectedAgent 作为下次新建 tab 的默认值。
@@ -86,7 +130,6 @@ function StatusLight(): JSX.Element {
 
 export function MainView(): JSX.Element {
   const tab = useActiveTab();
-  const projectPath = tab.projectPath;
   const uiState = tab.uiState;
   const mode = tab.mode;
   const cliBlockCount = tab.cliBlocks.length;
@@ -105,13 +148,11 @@ export function MainView(): JSX.Element {
       transition={{ duration: 0.42, ease: "easeOut" }}
       className="mx-auto flex h-full w-full max-w-7xl flex-col gap-3 px-4 py-3"
     >
-      {/* Top Header — 单行紧凑：Agent 选择 + 工程路径 + 状态灯 */}
+      {/* Top Header — 单行紧凑：Agent 选择 + 工程路径（按钮） + 状态灯 */}
       <div className="flex items-center justify-between gap-3 border-b border-black/5 pb-1.5 dark:border-white/5">
         <div className="flex min-w-0 items-center gap-2">
           <AgentSelector />
-          <span className="truncate text-[11px] text-zinc-500/85 dark:text-zinc-400/85">
-            {projectPath ?? "未选择工程"}
-          </span>
+          <ProjectPathButton />
         </div>
         <StatusLight />
       </div>

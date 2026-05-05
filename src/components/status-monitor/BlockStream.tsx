@@ -15,7 +15,7 @@
 
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useActiveTabField } from "../../hooks/useActiveTab";
+import { useActiveTabField, useActiveTabId } from "../../hooks/useActiveTab";
 import type { CliBlock } from "../../types/blocks";
 
 /// Markdown 渲染——Agent 输出常含 **bold** / `code` / 代码块 / 列表 / 表格 / 链接。
@@ -325,11 +325,18 @@ function BlockRenderer({ block }: { block: CliBlock }): JSX.Element | null {
 
 export function BlockStream(): JSX.Element | null {
   const blocks = useActiveTabField("cliBlocks");
+  const activeTabId = useActiveTabId();
 
   if (blocks.length === 0) return null;
 
+  // key={activeTabId}：切 tab 时强制滚动容器重挂载，scrollTop 自然清零，
+  // 不需要手动持久化 / 恢复滚动位置（每个 tab 独立流，回到该 tab 看见的就是
+  // 那个 tab 当下的全量 blocks 列表）。
   return (
-    <div className="flex h-full flex-col gap-2 overflow-y-auto px-1 py-1 text-xs leading-relaxed">
+    <div
+      key={activeTabId ?? "no-tab"}
+      className="flex h-full flex-col gap-2 overflow-y-auto px-1 py-1 text-xs leading-relaxed"
+    >
       {blocks.map((block) => (
         <div key={block.id}>
           <BlockRenderer block={block} />
