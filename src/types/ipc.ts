@@ -30,3 +30,17 @@ export interface ErrorPayload {
   message: string;
   code?: string;
 }
+
+/// 后端 list_sessions 命令返回的会话摘要。
+/// 重启 / 多窗口共存 / 调试面板用来"对账"前端 tab 跟后端实际活跃会话。
+export interface SessionSummary {
+  sessionId: string;
+  runId: string;
+  agentType: string;
+  status: string;
+  cwd?: string | null;
+  streamId: string;
+  lastUserPrompt?: string | null;
+  /// 后端 elapsed millisecond from creation to query 时刻（越小越新）
+  createdAtMs: number;
+}

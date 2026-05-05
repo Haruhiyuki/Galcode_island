@@ -7,6 +7,7 @@ import { WelcomeView } from "./components/welcome/WelcomeView";
 import { SettingsModal } from "./components/settings/SettingsModal";
 import { useAgentIPC } from "./hooks/useAgentIPC";
 import { useCliStream } from "./hooks/useCliStream";
+import { useTabsReattach } from "./hooks/useTabsReattach";
 import { useThemeHotkey } from "./hooks/useThemeHotkey";
 import { useAppStore } from "./stores/useAppStore";
 import { useSettingsStore } from "./stores/useSettingsStore";
@@ -17,6 +18,7 @@ function App(): JSX.Element {
   useThemeHotkey();
   useAgentIPC();
   useCliStream();
+  useTabsReattach();
 
   useEffect(() => {
     const state = useSettingsStore.getState();

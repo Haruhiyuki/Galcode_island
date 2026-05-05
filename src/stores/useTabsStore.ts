@@ -12,6 +12,7 @@
 // 到对应 tab slice。
 
 import { create } from "zustand";
+import { persist, createJSONStorage } from "zustand/middleware";
 import type {
   AgentStatus,
   AgentType,
@@ -72,7 +73,10 @@ interface TabsStoreState {
 
   /// 创建一个新 tab。init 可指定初始字段（agent / projectPath / 标题等），
   /// 返回新 tab 的 id；不会自动切到新 tab，调用方如需切换显式调 setActiveTab。
-  createTab: (init?: Partial<Omit<TabState, "id" | "createdAt">>) => string;
+  ///
+  /// `id` 可选：默认生成 UUID；reattach 场景下可指定后端 runId 当 id，
+  /// 让前端 tab.id ↔ 后端 runId 绑定（已存在的 id 会被忽略，返回原 id）。
+  createTab: (init?: Partial<Omit<TabState, "createdAt">>) => string;
   /// 关闭 tab；如果是当前 active 会自动切到相邻 tab；最后一个 tab 关闭后
   /// activeTabId 变成 null（调用方应处理这种状态，比如回 WelcomeView）。
   removeTab: (id: string) => void;
@@ -105,7 +109,7 @@ function generateTabId(): string {
   return `tab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function makeDefaultTab(init?: Partial<Omit<TabState, "id" | "createdAt">>): TabState {
+function makeDefaultTab(init?: Partial<TabState>): TabState {
   return {
     id: "",
     title: init?.title ?? "新会话",
@@ -129,13 +133,39 @@ function makeDefaultTab(init?: Partial<Omit<TabState, "id" | "createdAt">>): Tab
   };
 }
 
-export const useTabsStore = create<TabsStoreState>((set, get) => ({
+/// 持久化时跳过的"运行时"字段。重启后这些都按默认值重置：
+///   - cliBlocks：流式数据，太大；后端进程已经死了，重发不了
+///   - task：输入框残留意义不大
+///   - percent / bubble / agentStatus / uiState：运行时状态，要么 reattach
+///     拿后端真相，要么按 idle 起步
+///   - hasUnread：让用户自己看 TabBar 有没有事再决定
+function sanitizeTabForPersist(tab: TabState): TabState {
+  return {
+    ...tab,
+    cliBlocks: [],
+    task: "",
+    percent: 0,
+    bubble: "",
+    agentStatus: "idle",
+    uiState: "idle",
+    hasUnread: false,
+  };
+}
+
+export const useTabsStore = create<TabsStoreState>()(
+  persist<TabsStoreState>(
+    (set, get) => ({
   tabs: {},
   order: [],
   activeTabId: null,
 
   createTab: (init) => {
-    const id = generateTabId();
+    const requestedId = init?.id;
+    if (requestedId && get().tabs[requestedId]) {
+      // 已存在则不重建，返回现有 id（reattach 路径幂等）
+      return requestedId;
+    }
+    const id = requestedId ?? generateTabId();
     const tab: TabState = {
       ...makeDefaultTab(init),
       id,
@@ -257,4 +287,26 @@ export const useTabsStore = create<TabsStoreState>((set, get) => ({
     }
     return null;
   },
-}));
+    }),
+    {
+      name: "galcode_tabs",
+      version: 1,
+      storage: createJSONStorage(() => localStorage),
+      partialize: (state) =>
+        ({
+          tabs: Object.fromEntries(
+            Object.entries(state.tabs).map(([id, tab]) => [id, sanitizeTabForPersist(tab)]),
+          ),
+          order: state.order,
+          activeTabId: state.activeTabId,
+        }) as unknown as TabsStoreState,
+      // 重启加载时再 sanitize 一次，防止旧版本残留运行时字段
+      onRehydrateStorage: () => (state) => {
+        if (!state) return;
+        for (const id of Object.keys(state.tabs)) {
+          state.tabs[id] = sanitizeTabForPersist(state.tabs[id]);
+        }
+      },
+    },
+  ),
+);

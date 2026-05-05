@@ -160,8 +160,20 @@ export function TabBar(): JSX.Element | null {
     const tab = tabs[id];
     if (!tab) return;
 
+    const running = isTabRunning(tab);
+    const isLastTab = order.length === 1;
+
+    // 关掉一个还在跑的 tab 是破坏性动作（杀进程 / 中断 turn）；最后一个 tab
+    // 还在跑时关掉更"重"（直接回 WelcomeView）。两种情况都弹 confirm 防误触。
+    if (running) {
+      const message = isLastTab
+        ? `任务还在进行中。关闭这个 tab 会停止当前任务并返回欢迎页，确定吗？`
+        : `任务还在进行中。关闭这个 tab 会停止该任务，确定吗？`;
+      if (!window.confirm(message)) return;
+    }
+
     // 1) 如果还在跑或留有 session，调后端 stop（互斥安全：后端找不到的会报错，吞掉）
-    if (tab.sessionId || isTabRunning(tab)) {
+    if (tab.sessionId || running) {
       try {
         await invoke("stop_agent", { runId: id, sessionId: tab.sessionId });
       } catch (err) {
