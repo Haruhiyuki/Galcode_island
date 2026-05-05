@@ -141,11 +141,11 @@ export function MainView(): JSX.Element {
 
         <div className="flex-1 w-full translate-y-3">
           <AnimatePresence mode="wait">
-            {(uiState === "idle" && (mode === "idle" || !mode)) && (
+            {uiState === "idle" && (mode === "idle" || !mode) && (
               <InputBubble key="input-bubble" />
             )}
 
-            {showStatus && (
+            {showStatus && uiState !== "done" && uiState !== "error" && (
               <RunningBubble key="running-bubble" />
             )}
 

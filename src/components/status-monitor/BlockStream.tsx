@@ -13,7 +13,6 @@
 // 用 AnimatePresence 让新增 / 移除带过渡，但避免每次 update 都触发动画
 // （update 是同 id，AnimatePresence 不会重放 enter）。
 
-import { motion, AnimatePresence } from "framer-motion";
 import { useAppStore } from "../../stores/useAppStore";
 import type { CliBlock } from "../../types/blocks";
 
@@ -247,39 +246,18 @@ function BlockRenderer({ block }: { block: CliBlock }): JSX.Element | null {
   }
 }
 
-export function BlockStream(): JSX.Element {
+export function BlockStream(): JSX.Element | null {
   const blocks = useAppStore((s) => s.cliBlocks);
-  console.log("[BlockStream] render, blocks=", blocks.length);
+
+  if (blocks.length === 0) return null;
 
   return (
-    <div className="flex min-h-[120px] flex-col gap-1.5 rounded-lg border border-sky-300/40 bg-sky-50/30 p-2 dark:border-sky-400/20 dark:bg-sky-400/5">
-      <div className="sticky top-0 flex items-center justify-between border-b border-sky-300/30 pb-1 text-[11px] font-semibold text-sky-700 dark:border-sky-400/20 dark:text-sky-300">
-        <span>🔄 Agent 流式输出</span>
-        <span className="rounded-full bg-sky-200/60 px-2 py-0.5 text-[10px] dark:bg-sky-400/20">
-          {blocks.length}
-        </span>
-      </div>
-      {blocks.length === 0 ? (
-        <div className="flex flex-1 items-center justify-center text-[11px] text-zinc-400 dark:text-zinc-500">
-          Agent 还没产出中间消息（block 计数 = 0）
+    <div className="flex h-full flex-col gap-2 overflow-y-auto px-1 py-1 text-xs leading-relaxed">
+      {blocks.map((block) => (
+        <div key={block.id}>
+          <BlockRenderer block={block} />
         </div>
-      ) : (
-        <div className="flex max-h-[400px] flex-col gap-1.5 overflow-y-auto">
-          <AnimatePresence initial={false}>
-            {blocks.map((block) => (
-              <motion.div
-                key={block.id}
-                initial={{ opacity: 0, y: 4 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -4 }}
-                transition={{ duration: 0.18, ease: "easeOut" }}
-              >
-                <BlockRenderer block={block} />
-              </motion.div>
-            ))}
-          </AnimatePresence>
-        </div>
-      )}
+      ))}
     </div>
   );
 }

@@ -79,11 +79,8 @@ export function useAgentIPC(): void {
             store.setEmotionText(p.emotion ?? "");
             store.setSuggestionOptions(p.suggestionOptions ?? []);
             store.setBubble(p.emotion || "任务完成！");
-            store.addLogEntry({
-              timestamp: Date.now(),
-              level: "info",
-              message: `[session-complete] ${(p.summaryTranslation ?? "").slice(0, 320)}`,
-            });
+            // 归位 agentStatus 让 InputBubble 重新可见
+            store.setAgentStatus("idle");
           });
         }),
       );
