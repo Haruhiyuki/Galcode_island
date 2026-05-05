@@ -695,6 +695,7 @@ pub fn extract_opencode_text_from_messages(response: &Value) -> String {
 
 fn emit_opencode_message_part_internal(
     app: &AppHandle,
+    run_id: &str,
     stream_id: &str,
     part: &Value,
     suppress_log_line: bool,
@@ -708,7 +709,7 @@ fn emit_opencode_message_part_internal(
                 counter.fetch_add(1, Ordering::Relaxed);
             }
         }
-        emit_cli_stream_json_event(app, "opencode", stream_id, &value);
+        emit_cli_stream_json_event(app, "opencode", run_id, stream_id, &value);
     };
 
     match part_type {
@@ -906,6 +907,7 @@ fn emit_opencode_message_part_internal(
 
 pub fn emit_opencode_message_snapshot_internal(
     app: &AppHandle,
+    run_id: &str,
     stream_id: &str,
     response: &Value,
     suppress_log_line: bool,
@@ -919,7 +921,14 @@ pub fn emit_opencode_message_snapshot_internal(
         }
 
         for part in opencode_message_parts(&message) {
-            emit_opencode_message_part_internal(app, stream_id, &part, suppress_log_line, None);
+            emit_opencode_message_part_internal(
+                app,
+                run_id,
+                stream_id,
+                &part,
+                suppress_log_line,
+                None,
+            );
             emitted += 1;
         }
     }
@@ -929,6 +938,7 @@ pub fn emit_opencode_message_snapshot_internal(
 
 pub async fn emit_opencode_session_snapshot_internal(
     app: &AppHandle,
+    run_id: &str,
     port: u16,
     session_id: &str,
     directory: Option<&str>,
@@ -944,9 +954,13 @@ pub async fn emit_opencode_session_snapshot_internal(
     )
     .await
     {
-        Ok(response) => {
-            emit_opencode_message_snapshot_internal(app, stream_id, &response, suppress_log_line)
-        }
+        Ok(response) => emit_opencode_message_snapshot_internal(
+            app,
+            run_id,
+            stream_id,
+            &response,
+            suppress_log_line,
+        ),
         Err(_) => 0,
     }
 }
@@ -958,6 +972,7 @@ pub async fn emit_opencode_session_snapshot_internal(
 /// 解析单个 SSE 事件块并发射对应的 CLI 流事件。
 fn process_sse_block(
     app: &AppHandle,
+    run_id: &str,
     stream_id: &str,
     block: &str,
     visible_log_counter: &Arc<AtomicUsize>,
@@ -994,12 +1009,13 @@ fn process_sse_block(
         }
     }
 
-    emit_opencode_sse_json(app, stream_id, &json, visible_log_counter);
+    emit_opencode_sse_json(app, run_id, stream_id, &json, visible_log_counter);
 }
 
 /// 处理解析后的 SSE JSON 事件。
 fn emit_opencode_sse_json(
     app: &AppHandle,
+    run_id: &str,
     stream_id: &str,
     json: &Value,
     visible_log_counter: &Arc<AtomicUsize>,
@@ -1011,7 +1027,7 @@ fn emit_opencode_sse_json(
         .unwrap_or_else(|| json.clone());
     let emit = |value: Value| {
         visible_log_counter.fetch_add(1, Ordering::Relaxed);
-        emit_cli_stream_json_event(app, "opencode", stream_id, &value);
+        emit_cli_stream_json_event(app, "opencode", run_id, stream_id, &value);
     };
 
     match event_type {
@@ -1019,6 +1035,7 @@ fn emit_opencode_sse_json(
             if let Some(part) = properties.get("part").or(Some(&properties)) {
                 emit_opencode_message_part_internal(
                     app,
+                    run_id,
                     stream_id,
                     part,
                     false,
@@ -1033,6 +1050,7 @@ fn emit_opencode_sse_json(
                     for part in opencode_message_parts(message) {
                         emit_opencode_message_part_internal(
                             app,
+                            run_id,
                             stream_id,
                             &part,
                             false,
@@ -1078,13 +1096,14 @@ fn emit_opencode_sse_json(
                 if let Some(obj) = nested.as_object_mut() {
                     obj.insert("type".to_string(), Value::String(nested_type));
                 }
-                emit_opencode_sse_json(app, stream_id, &nested, visible_log_counter);
+                emit_opencode_sse_json(app, run_id, stream_id, &nested, visible_log_counter);
             }
         }
         _ => {
             if let Some(part) = properties.get("part") {
                 emit_opencode_message_part_internal(
                     app,
+                    run_id,
                     stream_id,
                     part,
                     false,
@@ -1098,6 +1117,7 @@ fn emit_opencode_sse_json(
 /// 尝试通过 SSE 端点接收事件流。成功连接返回 `true`。
 async fn try_opencode_sse_stream(
     app: &AppHandle,
+    run_id: &str,
     port: u16,
     session_id: &str,
     directory: Option<&str>,
@@ -1145,7 +1165,13 @@ async fn try_opencode_sse_stream(
                     while let Some(pos) = buffer.find("\n\n") {
                         let event_block = buffer[..pos].to_string();
                         buffer = buffer[pos + 2..].to_string();
-                        process_sse_block(app, stream_id, &event_block, visible_log_counter);
+                        process_sse_block(
+                            app,
+                            run_id,
+                            stream_id,
+                            &event_block,
+                            visible_log_counter,
+                        );
                     }
                 }
             }
@@ -1161,6 +1187,7 @@ async fn try_opencode_sse_stream(
 /// 轮询消息端点获取增量更新（SSE 不可用时的回退方案）。
 async fn poll_opencode_messages_stream(
     app: &AppHandle,
+    run_id: &str,
     port: u16,
     session_id: &str,
     directory: Option<&str>,
@@ -1204,6 +1231,7 @@ async fn poll_opencode_messages_stream(
                     Some(_) => {
                         emit_opencode_message_part_internal(
                             app,
+                            run_id,
                             stream_id,
                             part,
                             true,
@@ -1214,6 +1242,7 @@ async fn poll_opencode_messages_stream(
                     None => {
                         emit_opencode_message_part_internal(
                             app,
+                            run_id,
                             stream_id,
                             part,
                             false,
@@ -1313,6 +1342,7 @@ async fn poll_opencode_messages_stream(
 /// 优先使用 SSE 端点，不可用时回退为消息轮询。
 pub fn spawn_opencode_event_stream(
     app: &AppHandle,
+    run_id: &str,
     port: u16,
     session_id: &str,
     directory: Option<&str>,
@@ -1323,6 +1353,7 @@ pub fn spawn_opencode_event_stream(
     Arc<AtomicUsize>,
 ) {
     let app = app.clone();
+    let run_id = run_id.to_string();
     let session_id = session_id.to_string();
     let directory = directory.map(ToOwned::to_owned);
     let stream_id = stream_id.to_string();
@@ -1333,6 +1364,7 @@ pub fn spawn_opencode_event_stream(
     let handle = tokio::spawn(async move {
         let sse_ok = try_opencode_sse_stream(
             &app,
+            &run_id,
             port,
             &session_id,
             directory.as_deref(),
@@ -1345,6 +1377,7 @@ pub fn spawn_opencode_event_stream(
         if !sse_ok && !*stop_rx.borrow() {
             poll_opencode_messages_stream(
                 &app,
+                &run_id,
                 port,
                 &session_id,
                 directory.as_deref(),
@@ -1398,7 +1431,7 @@ pub async fn run_opencode_turn(
         spawn_opencode_auto_approve_poller(app, status.port, session_id, directory);
 
     let event_stream = stream_id.map(|stream_id| {
-        spawn_opencode_event_stream(app, status.port, session_id, directory, stream_id)
+        spawn_opencode_event_stream(app, run_id, status.port, session_id, directory, stream_id)
     });
 
     let result = opencode_request_with_timeout(
@@ -1429,6 +1462,7 @@ pub async fn run_opencode_turn(
         if visible_opencode_log_events == 0 {
             let _ = emit_opencode_session_snapshot_internal(
                 app,
+                run_id,
                 status.port,
                 session_id,
                 directory,
@@ -1437,10 +1471,12 @@ pub async fn run_opencode_turn(
             )
             .await;
         } else {
-            let emitted = emit_opencode_message_snapshot_internal(app, stream_id, &result, true);
+            let emitted =
+                emit_opencode_message_snapshot_internal(app, run_id, stream_id, &result, true);
             if emitted == 0 {
                 let _ = emit_opencode_session_snapshot_internal(
                     app,
+                    run_id,
                     status.port,
                     session_id,
                     directory,

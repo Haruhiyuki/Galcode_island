@@ -784,6 +784,7 @@ pub fn current_claude_stream_id(client: &ClaudeStreamClient) -> Option<String> {
 
 pub fn spawn_claude_stream_client(
     app: &AppHandle,
+    run_id: &str,
     directory: &str,
     session_id: Option<&str>,
     model: Option<&str>,
@@ -875,16 +876,25 @@ pub fn spawn_claude_stream_client(
         model: model_text,
         effort: effort_text,
         resume_session,
+        run_id: run_id.to_string(),
     });
 
     {
         let app = app.clone();
         let client = client.clone();
+        let run_id_for_stdout = run_id.to_string();
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                 let stream_id = current_claude_stream_id(&client);
                 if let Some(stream_id) = stream_id.as_deref() {
-                    emit_cli_stream_line(&app, "claude", stream_id, "stdout", &line);
+                    emit_cli_stream_line(
+                        &app,
+                        "claude",
+                        &run_id_for_stdout,
+                        stream_id,
+                        "stdout",
+                        &line,
+                    );
                 }
 
                 let Ok(event) = serde_json::from_str::<Value>(&line) else {
@@ -920,7 +930,13 @@ pub fn spawn_claude_stream_client(
                 }
                 for block_event in blocks {
                     if let Some(stream_id) = stream_id.as_deref() {
-                        emit_cli_stream_json_event(&app, "claude", stream_id, &block_event);
+                        emit_cli_stream_json_event(
+                            &app,
+                            "claude",
+                            &run_id_for_stdout,
+                            stream_id,
+                            &block_event,
+                        );
                     } else {
                         eprintln!("[claude] WARN: block dropped — no active stream_id");
                     }
@@ -968,6 +984,7 @@ pub fn spawn_claude_stream_client(
     {
         let app = app.clone();
         let client = client.clone();
+        let run_id_for_stderr = run_id.to_string();
         std::thread::spawn(move || {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
                 let trimmed = line.trim();
@@ -977,7 +994,14 @@ pub fn spawn_claude_stream_client(
 
                 let stream_id = current_claude_stream_id(&client);
                 if let Some(stream_id) = stream_id.as_deref() {
-                    emit_cli_stream_line(&app, "claude", stream_id, "stderr", trimmed);
+                    emit_cli_stream_line(
+                        &app,
+                        "claude",
+                        &run_id_for_stderr,
+                        stream_id,
+                        "stderr",
+                        trimmed,
+                    );
                 }
             }
         });
@@ -1139,6 +1163,7 @@ pub fn ensure_claude_stream_client(
 
     let client = spawn_claude_stream_client(
         app,
+        run_id,
         directory,
         session_id,
         model,

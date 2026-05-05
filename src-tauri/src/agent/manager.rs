@@ -8,7 +8,7 @@
 //   - SessionSnapshot 状态由 IPC events 透传给前端宠物气泡
 //   - 会话续接：每个 backend 自动捕获 session_id 存到 RuntimeState 里供下次 turn 复用
 
-use crate::agent::runtime::{ClaudeStreamClient, RuntimeState, DEFAULT_RUN_ID};
+use crate::agent::runtime::{ClaudeStreamClient, RuntimeState};
 use crate::agent::{claude as claude_agent, codex as codex_agent, opencode as opencode_agent};
 use crate::ipc::events::{self, SessionCompletePayload};
 use crate::llm::{
@@ -33,10 +33,18 @@ pub struct AgentSession {
     pub created_at: Instant,
     /// 用于 cli-output 事件路由（前端按 stream_id 把流式日志分发到对应会话面板）。
     pub stream_id: String,
+    /// tab 标识：多 tab UI 下每个 tab 独占一个 run_id，所有 emit / runtime
+    /// HashMap 都按它路由。前端按 IPC payload.runId 找到对应 tab slice 写入。
+    pub run_id: String,
 }
 
 impl AgentSession {
-    pub fn new(session_id: String, agent_type: String, cwd: Option<String>) -> Self {
+    pub fn new(
+        session_id: String,
+        agent_type: String,
+        cwd: Option<String>,
+        run_id: String,
+    ) -> Self {
         let stream_id = format!("stream-{}", session_id);
         Self {
             snapshot: Arc::new(Mutex::new(SessionSnapshot::new(
@@ -48,6 +56,7 @@ impl AgentSession {
             logs: Arc::new(Mutex::new(Vec::new())),
             created_at: Instant::now(),
             stream_id,
+            run_id,
         }
     }
 }
@@ -154,6 +163,7 @@ pub fn launch_claude_agent(
     app: AppHandle,
     state: Arc<AppState>,
     runtime_state: Arc<RuntimeState>,
+    run_id: String,
     cwd: String,
     task_zh: String,
 ) -> Result<LaunchResult, String> {
@@ -163,7 +173,12 @@ pub fn launch_claude_agent(
     }
 
     let session_id = uuid::Uuid::new_v4().to_string();
-    let sess = AgentSession::new(session_id.clone(), "claude-code".into(), Some(cwd.clone()));
+    let sess = AgentSession::new(
+        session_id.clone(),
+        "claude-code".into(),
+        Some(cwd.clone()),
+        run_id.clone(),
+    );
     let stream_id = sess.stream_id.clone();
     {
         let mut sn = sess.snapshot.lock().map_err(|e| e.to_string())?;
@@ -182,7 +197,7 @@ pub fn launch_claude_agent(
         mgr.sessions.insert(session_id.clone(), sess);
     }
 
-    emit_status_running(&app, &session_id, "Claude Code starting");
+    emit_status_running(&app, Some(&run_id), &session_id, "Claude Code starting");
 
     let app_handle = app.clone();
     let state_clone = Arc::clone(&state);
@@ -200,7 +215,7 @@ pub fn launch_claude_agent(
             if llm.is_some() { "ok" } else { "MISSING (无 API Key, 跳过翻译)" }
         );
         if llm.is_some() {
-            emit_progress(&app_handle, &sid, AgentStatus::Processing, "翻译输入到英文…", 10.0);
+            emit_progress(&app_handle, Some(&run_id), &sid, AgentStatus::Processing, "翻译输入到英文…", 10.0);
         }
         let t_tr_in_start = std::time::Instant::now();
         let prompt_for_agent = translate_input(&llm, &user_zh);
@@ -211,15 +226,15 @@ pub fn launch_claude_agent(
             prompt_for_agent.len()
         );
 
-        emit_progress(&app_handle, &sid, AgentStatus::Starting, "启动 Claude Code…", 30.0);
+        emit_progress(&app_handle, Some(&run_id), &sid, AgentStatus::Starting, "启动 Claude Code…", 30.0);
         let prefs = crate::agent::preferences::load_backend_preferences("claude-code");
 
-        emit_progress(&app_handle, &sid, AgentStatus::Processing, "Agent 工作中…", 50.0);
+        emit_progress(&app_handle, Some(&run_id), &sid, AgentStatus::Processing, "Agent 工作中…", 50.0);
         let t_turn_start = std::time::Instant::now();
         let turn_result = claude_agent::run_claude_stream_turn(
             &app_handle,
             runtime_clone.as_ref(),
-            DEFAULT_RUN_ID,
+            &run_id,
             &prompt_for_agent,
             &cwd_owned,
             resume_session_id.as_deref(),
@@ -243,7 +258,7 @@ pub fn launch_claude_agent(
                         mgr.remember_session("claude-code", &cwd_owned, &next_sid);
                     }
                 }
-                emit_progress(&app_handle, &sid, AgentStatus::Processing, "翻译输出 + 总结…", 80.0);
+                emit_progress(&app_handle, Some(&run_id), &sid, AgentStatus::Processing, "翻译输出 + 总结…", 80.0);
                 let t_post_start = std::time::Instant::now();
                 finalize_session(
                     &app_handle,
@@ -288,6 +303,7 @@ pub fn launch_codex_agent(
     app: AppHandle,
     state: Arc<AppState>,
     runtime_state: Arc<RuntimeState>,
+    run_id: String,
     cwd: String,
     task_zh: String,
 ) -> Result<LaunchResult, String> {
@@ -297,7 +313,12 @@ pub fn launch_codex_agent(
     }
 
     let session_id = uuid::Uuid::new_v4().to_string();
-    let sess = AgentSession::new(session_id.clone(), "codex".into(), Some(cwd.clone()));
+    let sess = AgentSession::new(
+        session_id.clone(),
+        "codex".into(),
+        Some(cwd.clone()),
+        run_id.clone(),
+    );
     let stream_id = sess.stream_id.clone();
     {
         let mut sn = sess.snapshot.lock().map_err(|e| e.to_string())?;
@@ -316,7 +337,7 @@ pub fn launch_codex_agent(
         mgr.sessions.insert(session_id.clone(), sess);
     }
 
-    emit_status_running(&app, &session_id, "Codex App Server starting");
+    emit_status_running(&app, Some(&run_id), &session_id, "Codex App Server starting");
 
     let app_handle = app.clone();
     let state_clone = Arc::clone(&state);
@@ -334,7 +355,7 @@ pub fn launch_codex_agent(
             if llm.is_some() { "ok" } else { "MISSING" }
         );
         if llm.is_some() {
-            emit_progress(&app_handle, &sid, AgentStatus::Processing, "翻译输入到英文…", 10.0);
+            emit_progress(&app_handle, Some(&run_id), &sid, AgentStatus::Processing, "翻译输入到英文…", 10.0);
         }
         let t_tr_in_start = std::time::Instant::now();
         let prompt_for_agent = translate_input(&llm, &user_zh);
@@ -345,15 +366,15 @@ pub fn launch_codex_agent(
             prompt_for_agent.len()
         );
 
-        emit_progress(&app_handle, &sid, AgentStatus::Starting, "启动 Codex App Server…", 30.0);
+        emit_progress(&app_handle, Some(&run_id), &sid, AgentStatus::Starting, "启动 Codex App Server…", 30.0);
         let prefs = crate::agent::preferences::load_backend_preferences("codex");
 
-        emit_progress(&app_handle, &sid, AgentStatus::Processing, "Agent 工作中…", 50.0);
+        emit_progress(&app_handle, Some(&run_id), &sid, AgentStatus::Processing, "Agent 工作中…", 50.0);
         let t_turn_start = std::time::Instant::now();
         let turn_result = codex_agent::run_codex_app_server_turn(
             &app_handle,
             runtime_clone.as_ref(),
-            DEFAULT_RUN_ID,
+            &run_id,
             &cwd_owned,
             resume_thread_id.as_deref(),
             None,
@@ -376,7 +397,7 @@ pub fn launch_codex_agent(
                 if let Ok(mut mgr) = state_clone.manager.lock() {
                     mgr.remember_session("codex", &cwd_owned, &thread_id);
                 }
-                emit_progress(&app_handle, &sid, AgentStatus::Processing, "翻译输出 + 总结…", 80.0);
+                emit_progress(&app_handle, Some(&run_id), &sid, AgentStatus::Processing, "翻译输出 + 总结…", 80.0);
                 let t_post_start = std::time::Instant::now();
                 finalize_session(
                     &app_handle,
@@ -421,6 +442,7 @@ pub fn launch_opencode_agent(
     app: AppHandle,
     state: Arc<AppState>,
     runtime_state: Arc<RuntimeState>,
+    run_id: String,
     cwd: String,
     task_zh: String,
 ) -> Result<LaunchResult, String> {
@@ -430,7 +452,12 @@ pub fn launch_opencode_agent(
     }
 
     let session_id = uuid::Uuid::new_v4().to_string();
-    let sess = AgentSession::new(session_id.clone(), "opencode".into(), Some(cwd.clone()));
+    let sess = AgentSession::new(
+        session_id.clone(),
+        "opencode".into(),
+        Some(cwd.clone()),
+        run_id.clone(),
+    );
     let stream_id = sess.stream_id.clone();
     {
         let mut sn = sess.snapshot.lock().map_err(|e| e.to_string())?;
@@ -449,7 +476,7 @@ pub fn launch_opencode_agent(
         mgr.sessions.insert(session_id.clone(), sess);
     }
 
-    emit_status_running(&app, &session_id, "OpenCode server starting");
+    emit_status_running(&app, Some(&run_id), &session_id, "OpenCode server starting");
 
     let app_handle = app.clone();
     let state_clone = Arc::clone(&state);
@@ -467,7 +494,7 @@ pub fn launch_opencode_agent(
             if llm.is_some() { "ok" } else { "MISSING" }
         );
         if llm.is_some() {
-            emit_progress(&app_handle, &sid, AgentStatus::Processing, "翻译输入到英文…", 10.0);
+            emit_progress(&app_handle, Some(&run_id), &sid, AgentStatus::Processing, "翻译输入到英文…", 10.0);
         }
         let llm_for_blocking = llm.clone();
         let user_zh_for_blocking = user_zh.clone();
@@ -484,14 +511,14 @@ pub fn launch_opencode_agent(
             prompt_for_agent.len()
         );
 
-        emit_progress(&app_handle, &sid, AgentStatus::Starting, "启动 OpenCode serve…", 25.0);
+        emit_progress(&app_handle, Some(&run_id), &sid, AgentStatus::Starting, "启动 OpenCode serve…", 25.0);
         let prefs = crate::agent::preferences::load_backend_preferences("opencode");
         let t_serve_start = std::time::Instant::now();
 
         if let Err(error) = opencode_agent::opencode_start(
             &app_handle,
             runtime_clone.as_ref(),
-            DEFAULT_RUN_ID,
+            &run_id,
             prefs.binary.as_deref(),
             prefs.proxy.as_deref(),
             None,
@@ -512,14 +539,14 @@ pub fn launch_opencode_agent(
         let dur_serve = t_serve_start.elapsed();
         eprintln!("[opencode] timing: serve_ready={}ms", dur_serve.as_millis());
 
-        emit_progress(&app_handle, &sid, AgentStatus::Processing, "创建会话…", 40.0);
+        emit_progress(&app_handle, Some(&run_id), &sid, AgentStatus::Processing, "创建会话…", 40.0);
         let t_session_start = std::time::Instant::now();
         let session_for_turn = match resume_session_id {
             Some(existing) => existing,
             None => match opencode_agent::opencode_create_session(
                 &app_handle,
                 runtime_clone.as_ref(),
-                DEFAULT_RUN_ID,
+                &run_id,
                 None,
                 Some(&cwd_owned),
             )
@@ -543,12 +570,12 @@ pub fn launch_opencode_agent(
         let dur_session = t_session_start.elapsed();
         eprintln!("[opencode] timing: create_session={}ms", dur_session.as_millis());
 
-        emit_progress(&app_handle, &sid, AgentStatus::Processing, "Agent 工作中…", 55.0);
+        emit_progress(&app_handle, Some(&run_id), &sid, AgentStatus::Processing, "Agent 工作中…", 55.0);
         let t_turn_start = std::time::Instant::now();
         let turn_result = opencode_agent::run_opencode_turn(
             &app_handle,
             runtime_clone.as_ref(),
-            DEFAULT_RUN_ID,
+            &run_id,
             &session_for_turn,
             &prompt_for_agent,
             None,
@@ -568,7 +595,7 @@ pub fn launch_opencode_agent(
                 if let Ok(mut mgr) = state_clone.manager.lock() {
                     mgr.remember_session("opencode", &cwd_owned, &session_for_turn);
                 }
-                emit_progress(&app_handle, &sid, AgentStatus::Processing, "翻译输出 + 总结…", 80.0);
+                emit_progress(&app_handle, Some(&run_id), &sid, AgentStatus::Processing, "翻译输出 + 总结…", 80.0);
                 let t_post_start = std::time::Instant::now();
                 let app_for_finalize = app_handle.clone();
                 let state_for_finalize = Arc::clone(&state_clone);
@@ -640,12 +667,13 @@ fn finalize_session(
     result_en: String,
     llm: Option<&LlmConfig>,
 ) {
-    let snapshot = match state.manager.lock() {
+    let (snapshot, run_id) = match state.manager.lock() {
         Ok(mgr) => mgr
             .sessions
             .get(session_id)
-            .map(|s| Arc::clone(&s.snapshot)),
-        Err(_) => None,
+            .map(|s| (Some(Arc::clone(&s.snapshot)), Some(s.run_id.clone())))
+            .unwrap_or((None, None)),
+        Err(_) => (None, None),
     };
 
     // 翻译输出 + 生成 summary 并发——summary 不需要等翻译完成的中文，直接吃英文
@@ -725,6 +753,7 @@ fn finalize_session(
         "agent://session-complete",
         SessionCompletePayload {
             session_id: session_id.to_string(),
+            run_id: run_id.clone(),
             mode: mode.clone(),
             emotion: emotion.clone(),
             summary_translation: summary.clone(),
@@ -745,6 +774,11 @@ fn fail_session(
     message: &str,
     code: &str,
 ) {
+    let run_id = state
+        .manager
+        .lock()
+        .ok()
+        .and_then(|mgr| mgr.sessions.get(session_id).map(|s| s.run_id.clone()));
     if let Ok(mgr) = state.manager.lock() {
         if let Some(s) = mgr.sessions.get(session_id) {
             if let Ok(mut snap) = s.snapshot.lock() {
@@ -753,11 +787,12 @@ fn fail_session(
             }
         }
     }
-    emit_err(app, session_id, message, code);
+    emit_err(app, run_id.as_deref(), session_id, message, code);
     let _ = app.emit(
         "agent://session-complete",
         SessionCompletePayload {
             session_id: session_id.to_string(),
+            run_id: run_id.clone(),
             mode: Some("error".into()),
             emotion: Some(format!("Agent 出错了: {}", message)),
             summary_translation: Some(message.to_string()),
@@ -769,11 +804,17 @@ fn fail_session(
     clear_active_session(state, session_id);
 }
 
-fn emit_status_running(app: &AppHandle, session_id: &str, description: &str) {
+fn emit_status_running(
+    app: &AppHandle,
+    run_id: Option<&str>,
+    session_id: &str,
+    description: &str,
+) {
     let _ = app.emit(
         "agent://status-changed",
         events::StatusChangedPayload {
             session_id: session_id.to_string(),
+            run_id: run_id.map(ToOwned::to_owned),
             status: AgentStatus::Running,
             tool_name: None,
             tool_description: Some(description.to_string()),
@@ -784,6 +825,7 @@ fn emit_status_running(app: &AppHandle, session_id: &str, description: &str) {
 
 fn emit_progress(
     app: &AppHandle,
+    run_id: Option<&str>,
     session_id: &str,
     status: AgentStatus,
     description: &str,
@@ -793,6 +835,7 @@ fn emit_progress(
         "agent://status-changed",
         events::StatusChangedPayload {
             session_id: session_id.to_string(),
+            run_id: run_id.map(ToOwned::to_owned),
             status,
             tool_name: None,
             tool_description: Some(description.to_string()),
@@ -807,11 +850,18 @@ fn clear_active_session(state: &Arc<AppState>, session_id: &str) {
     }
 }
 
-fn emit_err(app: &AppHandle, session_id: &str, message: &str, code: &str) {
+fn emit_err(
+    app: &AppHandle,
+    run_id: Option<&str>,
+    session_id: &str,
+    message: &str,
+    code: &str,
+) {
     let _ = app.emit(
         "agent://error",
         events::ErrorPayload {
             session_id: session_id.to_string(),
+            run_id: run_id.map(ToOwned::to_owned),
             message: message.to_string(),
             code: code.to_string(),
         },
@@ -828,13 +878,13 @@ pub fn stop_session(
     runtime_state: Arc<RuntimeState>,
     session_id: String,
 ) -> Result<(), String> {
-    let snapshot = {
+    let (snapshot, run_id) = {
         let mut mgr = state.manager.lock().map_err(|e| e.to_string())?;
         mgr.clear_active_session_if(&session_id);
         let Some(sess) = mgr.sessions.get_mut(&session_id) else {
             return Err("会话不存在".into());
         };
-        Arc::clone(&sess.snapshot)
+        (Arc::clone(&sess.snapshot), sess.run_id.clone())
     };
     if let Ok(mut s) = snapshot.lock() {
         s.interrupted = true;
@@ -851,6 +901,7 @@ pub fn stop_session(
         "agent://status-changed",
         events::StatusChangedPayload {
             session_id: session_id.clone(),
+            run_id: Some(run_id),
             status: AgentStatus::Idle,
             tool_name: None,
             tool_description: Some("stopped".into()),

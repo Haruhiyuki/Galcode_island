@@ -48,6 +48,7 @@ pub fn strip_cli_warning_lines(text: &str) -> String {
 pub fn emit_cli_stream_line(
     app: &AppHandle,
     backend: &str,
+    run_id: &str,
     stream_id: &str,
     channel: &str,
     line: &str,
@@ -59,17 +60,20 @@ pub fn emit_cli_stream_line(
             backend: backend.to_string(),
             channel: channel.to_string(),
             line: line.to_string(),
-            // 多 tab 路由：当前 emit 链路尚未带上 run_id；前端按 stream_id 兜底分发。
-            // 后续可以让各 backend 模块在创建 stream 时把 run_id 注册到一个映射，
-            // 这里再查映射回填 run_id。先发空字符串维持兼容。
-            run_id: String::new(),
+            run_id: run_id.to_string(),
         },
     );
 }
 
-pub fn emit_cli_stream_json_event(app: &AppHandle, backend: &str, stream_id: &str, value: &Value) {
+pub fn emit_cli_stream_json_event(
+    app: &AppHandle,
+    backend: &str,
+    run_id: &str,
+    stream_id: &str,
+    value: &Value,
+) {
     if let Ok(line) = serde_json::to_string(value) {
-        emit_cli_stream_line(app, backend, stream_id, "stdout", &line);
+        emit_cli_stream_line(app, backend, run_id, stream_id, "stdout", &line);
     }
 }
 

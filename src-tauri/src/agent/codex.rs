@@ -53,10 +53,11 @@ pub struct CodexVerifyResult {
 // 块事件辅助
 // ---------------------------------------------------------------------------
 
-pub fn emit_codex_block(app: &AppHandle, stream_id: &str, block: Value) {
+pub fn emit_codex_block(app: &AppHandle, run_id: &str, stream_id: &str, block: Value) {
     emit_cli_stream_json_event(
         app,
         "codex",
+        run_id,
         stream_id,
         &json!({
             "type": "galcode.block",
@@ -114,14 +115,44 @@ pub fn codex_stream_id_for_thread(
         .and_then(|streams| streams.get(thread_id).cloned())
 }
 
+/// 多 tab emit 路由：从 thread_id 同时查出 (stream_id, run_id)。
+/// 没注册过 (启动早期 / 已 cleanup) 时返回 None，调用方应跳过 emit。
+pub fn codex_stream_route_for_thread(
+    thread_streams: &Arc<Mutex<HashMap<String, String>>>,
+    thread_run_ids: &Arc<Mutex<HashMap<String, String>>>,
+    thread_id: Option<&str>,
+) -> Option<(String, String)> {
+    let stream_id = codex_stream_id_for_thread(thread_streams, thread_id)?;
+    let run_id = codex_run_id_for_thread(thread_run_ids, thread_id);
+    Some((stream_id, run_id))
+}
+
+/// 多 tab 路由：从 thread_id 反查对应 tab 的 run_id。
+/// 找不到映射时回落到 DEFAULT_RUN_ID（兼容老调用路径）。
+pub fn codex_run_id_for_thread(
+    thread_run_ids: &Arc<Mutex<HashMap<String, String>>>,
+    thread_id: Option<&str>,
+) -> String {
+    let Some(thread_id) = thread_id.map(str::trim).filter(|v| !v.is_empty()) else {
+        return crate::agent::runtime::DEFAULT_RUN_ID.to_string();
+    };
+    thread_run_ids
+        .lock()
+        .ok()
+        .and_then(|map| map.get(thread_id).cloned())
+        .unwrap_or_else(|| crate::agent::runtime::DEFAULT_RUN_ID.to_string())
+}
+
 pub fn emit_codex_error_for_thread(
     app: &AppHandle,
     thread_streams: &Arc<Mutex<HashMap<String, String>>>,
+    thread_run_ids: &Arc<Mutex<HashMap<String, String>>>,
     thread_id: Option<&str>,
     line: &str,
 ) {
     if let Some(stream_id) = codex_stream_id_for_thread(thread_streams, thread_id) {
-        emit_cli_stream_line(app, "codex", &stream_id, "stderr", line);
+        let run_id = codex_run_id_for_thread(thread_run_ids, thread_id);
+        emit_cli_stream_line(app, "codex", &run_id, &stream_id, "stderr", line);
     }
 }
 
@@ -615,6 +646,7 @@ pub fn handle_codex_app_server_request(
     client: &CodexAppServerClient,
     active_turns: &Arc<Mutex<HashMap<String, CodexActiveTurn>>>,
     thread_streams: &Arc<Mutex<HashMap<String, String>>>,
+    thread_run_ids: &Arc<Mutex<HashMap<String, String>>>,
     pending_approvals: &Arc<Mutex<HashMap<String, CodexPendingApproval>>>,
     value: &Value,
 ) {
@@ -658,34 +690,42 @@ pub fn handle_codex_app_server_request(
         approvals.insert(approval_id, record);
     }
 
-    if let Some(stream_id) = codex_stream_id_for_thread(thread_streams, thread_id.as_deref()) {
-        emit_codex_block(app, &stream_id, block);
+    if let Some((stream_id, run_id)) =
+        codex_stream_route_for_thread(thread_streams, thread_run_ids, thread_id.as_deref())
+    {
+        emit_codex_block(app, &run_id, &stream_id, block);
     }
 }
 
-pub fn codex_stream_id_for_turn(
+/// 多 tab emit 路由：先看 active_turns 里有没有这个 turn 的 (stream_id, run_id)，
+/// 没有再回落到 thread_streams + thread_run_ids。
+pub fn codex_stream_route_for_turn(
     active_turns: &Arc<Mutex<HashMap<String, CodexActiveTurn>>>,
     thread_streams: &Arc<Mutex<HashMap<String, String>>>,
+    thread_run_ids: &Arc<Mutex<HashMap<String, String>>>,
     thread_id: Option<&str>,
     turn_id: Option<&str>,
-) -> Option<String> {
+) -> Option<(String, String)> {
     if let Some(turn_id) = turn_id.filter(|value| !value.trim().is_empty()) {
-        if let Some(stream_id) = active_turns
-            .lock()
-            .ok()
-            .and_then(|turns| turns.get(turn_id).and_then(|turn| turn.stream_id.clone()))
-        {
-            return Some(stream_id);
+        if let Some((stream_id, run_id)) = active_turns.lock().ok().and_then(|turns| {
+            turns.get(turn_id).and_then(|turn| {
+                turn.stream_id
+                    .clone()
+                    .map(|sid| (sid, turn.run_id.clone()))
+            })
+        }) {
+            return Some((stream_id, run_id));
         }
     }
 
-    codex_stream_id_for_thread(thread_streams, thread_id)
+    codex_stream_route_for_thread(thread_streams, thread_run_ids, thread_id)
 }
 
 pub fn handle_codex_app_server_notification(
     app: &AppHandle,
     active_turns: &Arc<Mutex<HashMap<String, CodexActiveTurn>>>,
     thread_streams: &Arc<Mutex<HashMap<String, String>>>,
+    thread_run_ids: &Arc<Mutex<HashMap<String, String>>>,
     pending_approvals: &Arc<Mutex<HashMap<String, CodexPendingApproval>>>,
     value: &Value,
 ) {
@@ -700,7 +740,13 @@ pub fn handle_codex_app_server_notification(
             .and_then(|turn| turn.get("id"))
             .and_then(Value::as_str)
     });
-    let stream_id = codex_stream_id_for_turn(active_turns, thread_streams, thread_id, turn_id);
+    let route = codex_stream_route_for_turn(
+        active_turns,
+        thread_streams,
+        thread_run_ids,
+        thread_id,
+        turn_id,
+    );
 
     if method == "serverRequest/resolved" {
         let request_id = params.get("requestId").and_then(json_rpc_id_string);
@@ -715,7 +761,7 @@ pub fn handle_codex_app_server_notification(
                 });
                 key.and_then(|key| approvals.remove(&key))
             });
-            if let (Some(stream_id), Some(record)) = (stream_id.clone(), matched) {
+            if let (Some((stream_id, run_id)), Some(record)) = (route.clone(), matched) {
                 let mut block = record.block.clone();
                 if let Some(object) = block.as_object_mut() {
                     object.insert("status".to_string(), Value::String("resolved".to_string()));
@@ -726,7 +772,7 @@ pub fn handle_codex_app_server_notification(
                     );
                     object.insert("suppressLogLine".to_string(), Value::Bool(true));
                 }
-                emit_codex_block(app, &stream_id, block);
+                emit_codex_block(app, &run_id, &stream_id, block);
             }
         }
         return;
@@ -734,8 +780,8 @@ pub fn handle_codex_app_server_notification(
 
     match method {
         "turn/started" => {
-            if let Some(stream_id) = stream_id {
-                emit_cli_stream_line(app, "codex", &stream_id, "stdout", "Turn started");
+            if let Some((stream_id, run_id)) = route {
+                emit_cli_stream_line(app, "codex", &run_id, &stream_id, "stdout", "Turn started");
             }
         }
         "turn/completed" => {
@@ -753,7 +799,14 @@ pub fn handle_codex_app_server_notification(
                     if let Some(stream_id) = active_turn.stream_id.as_deref() {
                         if turn_status == "failed" {
                             if let Some(message) = codex_turn_failure_message(&turn) {
-                                emit_cli_stream_line(app, "codex", stream_id, "stderr", &message);
+                                emit_cli_stream_line(
+                                    app,
+                                    "codex",
+                                    &active_turn.run_id,
+                                    stream_id,
+                                    "stderr",
+                                    &message,
+                                );
                             }
                         }
                     }
@@ -773,6 +826,9 @@ pub fn handle_codex_app_server_notification(
                 let _ = thread_streams
                     .lock()
                     .map(|mut streams| streams.remove(thread_id));
+                let _ = thread_run_ids
+                    .lock()
+                    .map(|mut map| map.remove(thread_id));
             }
         }
         "item/started" | "item/completed" => {
@@ -786,7 +842,7 @@ pub fn handle_codex_app_server_notification(
             } else {
                 "success"
             };
-            let Some(stream_id) = stream_id else {
+            let Some((stream_id, run_id)) = route else {
                 return;
             };
 
@@ -815,6 +871,7 @@ pub fn handle_codex_app_server_notification(
                     }
                     emit_codex_block(
                         app,
+                        &run_id,
                         &stream_id,
                         codex_command_output_block(
                             item_id,
@@ -838,6 +895,7 @@ pub fn handle_codex_app_server_notification(
                     }
                     emit_codex_block(
                         app,
+                        &run_id,
                         &stream_id,
                         codex_todo_block(item_id, text, phase, method == "item/completed"),
                     );
@@ -867,6 +925,7 @@ pub fn handle_codex_app_server_notification(
                     if !text.trim().is_empty() {
                         emit_codex_block(
                             app,
+                            &run_id,
                             &stream_id,
                             codex_text_block(item_id, "thought", &text, None, true),
                         );
@@ -887,6 +946,7 @@ pub fn handle_codex_app_server_notification(
                         }
                         emit_codex_block(
                             app,
+                            &run_id,
                             &stream_id,
                             codex_text_block(item_id, "text", text, None, false),
                         );
@@ -902,6 +962,7 @@ pub fn handle_codex_app_server_notification(
                         .unwrap_or("design.html");
                     emit_codex_block(
                         app,
+                        &run_id,
                         &stream_id,
                         codex_text_block(
                             item_id,
@@ -918,7 +979,7 @@ pub fn handle_codex_app_server_notification(
         "item/commandExecution/outputDelta" => {
             let item_id = params.get("itemId").and_then(Value::as_str).unwrap_or("");
             let delta = params.get("delta").and_then(Value::as_str).unwrap_or("");
-            let Some(stream_id) = stream_id else {
+            let Some((stream_id, run_id)) = route else {
                 return;
             };
             if let Some(turn_id) = turn_id {
@@ -933,6 +994,7 @@ pub fn handle_codex_app_server_notification(
                             .unwrap_or_else(|| "command_execution".to_string());
                         emit_codex_block(
                             app,
+                            &run_id,
                             &stream_id,
                             codex_command_output_block(item_id, &command, &output, "running", true),
                         );
@@ -943,7 +1005,7 @@ pub fn handle_codex_app_server_notification(
         "item/plan/delta" => {
             let item_id = params.get("itemId").and_then(Value::as_str).unwrap_or("");
             let delta = params.get("delta").and_then(Value::as_str).unwrap_or("");
-            let Some(stream_id) = stream_id else {
+            let Some((stream_id, run_id)) = route else {
                 return;
             };
             if let Some(turn_id) = turn_id {
@@ -953,6 +1015,7 @@ pub fn handle_codex_app_server_notification(
                             append_codex_map_text(&mut active_turn.todo_text, item_id, delta);
                         emit_codex_block(
                             app,
+                            &run_id,
                             &stream_id,
                             codex_todo_block(item_id, &text, "running", true),
                         );
@@ -963,7 +1026,7 @@ pub fn handle_codex_app_server_notification(
         "item/reasoning/summaryTextDelta" | "item/reasoning/textDelta" => {
             let item_id = params.get("itemId").and_then(Value::as_str).unwrap_or("");
             let delta = params.get("delta").and_then(Value::as_str).unwrap_or("");
-            let Some(stream_id) = stream_id else {
+            let Some((stream_id, run_id)) = route else {
                 return;
             };
             if let Some(turn_id) = turn_id {
@@ -973,6 +1036,7 @@ pub fn handle_codex_app_server_notification(
                             append_codex_map_text(&mut active_turn.thought_text, item_id, delta);
                         emit_codex_block(
                             app,
+                            &run_id,
                             &stream_id,
                             codex_text_block(item_id, "thought", &text, None, true),
                         );
@@ -983,7 +1047,7 @@ pub fn handle_codex_app_server_notification(
         "item/agentMessage/delta" => {
             let item_id = params.get("itemId").and_then(Value::as_str).unwrap_or("");
             let delta = params.get("delta").and_then(Value::as_str).unwrap_or("");
-            let Some(stream_id) = stream_id else {
+            let Some((stream_id, run_id)) = route else {
                 return;
             };
             if let Some(turn_id) = turn_id {
@@ -994,6 +1058,7 @@ pub fn handle_codex_app_server_notification(
                         active_turn.last_message = text.clone();
                         emit_codex_block(
                             app,
+                            &run_id,
                             &stream_id,
                             codex_text_block(item_id, "text", &text, None, true),
                         );
@@ -1007,7 +1072,7 @@ pub fn handle_codex_app_server_notification(
                 .and_then(|error| error.get("message").or(Some(error)))
                 .and_then(Value::as_str)
                 .unwrap_or("Codex App Server returned an error.");
-            emit_codex_error_for_thread(app, thread_streams, thread_id, message);
+            emit_codex_error_for_thread(app, thread_streams, thread_run_ids, thread_id, message);
 
             let will_retry = params
                 .get("willRetry")
@@ -1029,6 +1094,9 @@ pub fn handle_codex_app_server_notification(
                     let _ = thread_streams
                         .lock()
                         .map(|mut streams| streams.remove(thread_id));
+                    let _ = thread_run_ids
+                        .lock()
+                        .map(|mut map| map.remove(thread_id));
                 }
             }
         }
@@ -1042,6 +1110,7 @@ pub fn handle_codex_app_server_stdout_line(
     pending_responses: &Arc<Mutex<HashMap<String, mpsc::Sender<Result<Value, String>>>>>,
     active_turns: &Arc<Mutex<HashMap<String, CodexActiveTurn>>>,
     thread_streams: &Arc<Mutex<HashMap<String, String>>>,
+    thread_run_ids: &Arc<Mutex<HashMap<String, String>>>,
     pending_approvals: &Arc<Mutex<HashMap<String, CodexPendingApproval>>>,
     line: &str,
 ) {
@@ -1051,13 +1120,23 @@ pub fn handle_codex_app_server_stdout_line(
     }
 
     let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
-        for stream_id in thread_streams
+        // 非 JSON 行：广播给所有活跃 thread 各自的 (stream_id, run_id)。
+        // 多 tab 模式下仍然广播到每个 tab 的日志面板，保留诊断价值。
+        let routes: Vec<(String, String)> = thread_streams
             .lock()
             .ok()
-            .map(|streams| streams.values().cloned().collect::<Vec<_>>())
-            .unwrap_or_default()
-        {
-            emit_cli_stream_line(app, "codex", &stream_id, "stdout", trimmed);
+            .map(|streams| {
+                streams
+                    .iter()
+                    .map(|(thread_id, stream_id)| {
+                        let run_id = codex_run_id_for_thread(thread_run_ids, Some(thread_id));
+                        (run_id, stream_id.clone())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (run_id, stream_id) in routes {
+            emit_cli_stream_line(app, "codex", &run_id, &stream_id, "stdout", trimmed);
         }
         return;
     };
@@ -1073,6 +1152,7 @@ pub fn handle_codex_app_server_stdout_line(
             client,
             active_turns,
             thread_streams,
+            thread_run_ids,
             pending_approvals,
             &value,
         );
@@ -1084,6 +1164,7 @@ pub fn handle_codex_app_server_stdout_line(
             app,
             active_turns,
             thread_streams,
+            thread_run_ids,
             pending_approvals,
             &value,
         );
@@ -1137,6 +1218,7 @@ pub fn spawn_codex_app_server_client(
         pending_approvals: Arc::new(Mutex::new(HashMap::new())),
         active_turns: Arc::new(Mutex::new(HashMap::new())),
         thread_streams: Arc::new(Mutex::new(HashMap::new())),
+        thread_run_ids: Arc::new(Mutex::new(HashMap::new())),
     });
 
     {
@@ -1145,6 +1227,7 @@ pub fn spawn_codex_app_server_client(
         let pending_responses = client.pending_responses.clone();
         let active_turns = client.active_turns.clone();
         let thread_streams = client.thread_streams.clone();
+        let thread_run_ids = client.thread_run_ids.clone();
         let pending_approvals = client.pending_approvals.clone();
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
@@ -1154,6 +1237,7 @@ pub fn spawn_codex_app_server_client(
                     &pending_responses,
                     &active_turns,
                     &thread_streams,
+                    &thread_run_ids,
                     &pending_approvals,
                     &line,
                 );
@@ -1164,19 +1248,29 @@ pub fn spawn_codex_app_server_client(
     {
         let app = app.clone();
         let thread_streams = client.thread_streams.clone();
+        let thread_run_ids = client.thread_run_ids.clone();
         std::thread::spawn(move || {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
                 let trimmed = line.trim();
                 if trimmed.is_empty() {
                     continue;
                 }
-                let stream_ids = thread_streams
+                let routes: Vec<(String, String)> = thread_streams
                     .lock()
                     .ok()
-                    .map(|streams| streams.values().cloned().collect::<Vec<_>>())
+                    .map(|streams| {
+                        streams
+                            .iter()
+                            .map(|(thread_id, stream_id)| {
+                                let run_id =
+                                    codex_run_id_for_thread(&thread_run_ids, Some(thread_id));
+                                (run_id, stream_id.clone())
+                            })
+                            .collect()
+                    })
                     .unwrap_or_default();
-                for stream_id in stream_ids {
-                    emit_cli_stream_line(&app, "codex", &stream_id, "stderr", trimmed);
+                for (run_id, stream_id) in routes {
+                    emit_cli_stream_line(&app, "codex", &run_id, &stream_id, "stderr", trimmed);
                 }
             }
         });
@@ -1260,7 +1354,7 @@ pub fn reset_shared_codex_client(state: &RuntimeState) {
 pub fn run_codex_app_server_turn(
     app: &AppHandle,
     state: &RuntimeState,
-    _run_id: &str,
+    run_id: &str,
     directory: &str,
     existing_thread_id: Option<&str>,
     system_prompt: Option<&str>,
@@ -1271,7 +1365,7 @@ pub fn run_codex_app_server_turn(
     proxy: Option<&str>,
     stream_id: Option<&str>,
 ) -> Result<(String, String), String> {
-    let client = ensure_codex_app_server_client(app, state, _run_id, requested_binary, proxy)?;
+    let client = ensure_codex_app_server_client(app, state, run_id, requested_binary, proxy)?;
 
     let thread_result = if let Some(thread_id) =
         existing_thread_id.filter(|value| !value.trim().is_empty())
@@ -1316,6 +1410,13 @@ pub fn run_codex_app_server_turn(
             .map_err(|_| "Failed to track Codex stream state.".to_string())?
             .insert(thread_id.clone(), stream_id.to_string());
     }
+    // 多 tab 路由：thread_id → run_id 注册到客户端共享映射，后台 stdout 线程
+    // 收到 notification / stderr 时按 thread_id 反查 run_id 一起发到 emit。
+    client
+        .thread_run_ids
+        .lock()
+        .map_err(|_| "Failed to track Codex thread→run mapping.".to_string())?
+        .insert(thread_id.clone(), run_id.to_string());
 
     let turn_result = client.send_request(
         "turn/start",
@@ -1347,6 +1448,7 @@ pub fn run_codex_app_server_turn(
                 thread_id: thread_id.clone(),
                 working_dir: directory.to_string(),
                 stream_id: stream_id.map(ToOwned::to_owned),
+                run_id: run_id.to_string(),
                 last_message: String::new(),
                 command_labels: HashMap::new(),
                 command_outputs: HashMap::new(),
@@ -1368,6 +1470,10 @@ pub fn run_codex_app_server_turn(
                 .thread_streams
                 .lock()
                 .map(|mut streams| streams.remove(&thread_id));
+            let _ = client
+                .thread_run_ids
+                .lock()
+                .map(|mut map| map.remove(&thread_id));
             return Err(format!(
                 "Codex turn timed out after {}s.",
                 CODEX_TURN_TIMEOUT.as_secs()
@@ -1378,6 +1484,10 @@ pub fn run_codex_app_server_turn(
                 .thread_streams
                 .lock()
                 .map(|mut streams| streams.remove(&thread_id));
+            let _ = client
+                .thread_run_ids
+                .lock()
+                .map(|mut map| map.remove(&thread_id));
             return Err("Codex turn stream was closed unexpectedly.".to_string());
         }
     };

@@ -90,6 +90,11 @@ pub struct CodexAppServerClient {
     pub pending_approvals: Arc<Mutex<HashMap<String, CodexPendingApproval>>>,
     pub active_turns: Arc<Mutex<HashMap<String, CodexActiveTurn>>>,
     pub thread_streams: Arc<Mutex<HashMap<String, String>>>,
+    /// 多 tab 路由：thread_id → run_id。
+    /// Codex 是单进程多 thread 模型，多个 tab 共享 CODEX_SHARED_KEY 一个 client；
+    /// stdout 事件分发到各自 tab 时，需要按 thread_id 反查 run_id 填进 emit。
+    /// 与 thread_streams 并列维护，turn 结束 / 超时清理时一起 remove。
+    pub thread_run_ids: Arc<Mutex<HashMap<String, String>>>,
 }
 
 #[derive(Clone)]
@@ -106,6 +111,8 @@ pub struct CodexActiveTurn {
     pub thread_id: String,
     pub working_dir: String,
     pub stream_id: Option<String>,
+    /// 多 tab 路由：当前 turn 所属的 tab；emit 时跟 stream_id 一起带上。
+    pub run_id: String,
     pub last_message: String,
     pub command_labels: HashMap<String, String>,
     pub command_outputs: HashMap<String, String>,
@@ -139,6 +146,13 @@ pub struct ClaudeStreamClient {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub resume_session: Option<String>,
+    /// 多 tab 路由：spawn 时由 ensure_claude_stream_client 注入。
+    /// stdout/stderr 后台线程 emit 流事件时填到 CliStreamEvent.run_id，
+    /// 前端按 run_id 把流块写到对应 tab 的 cliBlocks。
+    /// （字段当前在 spawn 闭包里通过同名局部变量捕获，结构里保留是为了
+    /// 日志诊断 / 之后 ensure_*_matches 跨 tab 复用判断时可用。）
+    #[allow(dead_code)]
+    pub run_id: String,
 }
 
 pub struct ClaudePendingTurn {

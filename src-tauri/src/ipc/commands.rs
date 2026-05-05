@@ -16,6 +16,54 @@ pub struct PermissionResponse {
     pub ok: bool,
 }
 
+/// 多 tab UI 启动 / reattach 时枚举所有活跃会话。
+/// 前端拿这个 list 跟自己持久化的 tab 列表对比，决定哪些 tab 还能继续显示进度。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionSummary {
+    pub session_id: String,
+    pub run_id: String,
+    pub agent_type: String,
+    pub status: crate::session::state::AgentStatus,
+    pub cwd: Option<String>,
+    pub stream_id: String,
+    pub last_user_prompt: Option<String>,
+    pub created_at_ms: u128,
+}
+
+/// 返回当前 manager 里所有 session 的摘要快照。
+/// 不带状态过滤——已完成 / 出错的也会列出来，让前端决定是否清理。
+#[tauri::command]
+pub fn list_sessions(state: State<Arc<AppState>>) -> Result<Vec<SessionSummary>, String> {
+    let mgr = state.manager.lock().map_err(|e| e.to_string())?;
+    let mut summaries: Vec<SessionSummary> = mgr
+        .sessions
+        .iter()
+        .map(|(sid, sess)| {
+            let snap = sess.snapshot.lock().ok();
+            SessionSummary {
+                session_id: sid.clone(),
+                run_id: sess.run_id.clone(),
+                agent_type: snap
+                    .as_ref()
+                    .map(|s| s.agent_type.clone())
+                    .unwrap_or_default(),
+                status: snap
+                    .as_ref()
+                    .map(|s| s.status)
+                    .unwrap_or(crate::session::state::AgentStatus::Idle),
+                cwd: snap.as_ref().and_then(|s| s.cwd.clone()),
+                stream_id: sess.stream_id.clone(),
+                last_user_prompt: snap.as_ref().and_then(|s| s.last_user_prompt.clone()),
+                created_at_ms: sess.created_at.elapsed().as_millis(),
+            }
+        })
+        .collect();
+    // 按最近创建（elapsed 越小越新）排在前面
+    summaries.sort_by_key(|s| s.created_at_ms);
+    Ok(summaries)
+}
+
 #[tauri::command]
 pub fn select_project_folder(app: AppHandle) -> Result<Option<String>, String> {
     Ok(app.dialog().file().blocking_pick_folder().and_then(|fp| {
@@ -27,6 +75,13 @@ pub fn select_project_folder(app: AppHandle) -> Result<Option<String>, String> {
 
 /// 中文任务 → 翻译 → 启动 Agent（claude-code / opencode / codex / demo）。
 /// 工作目录默认 `.`，可通过 `cwd` 指定。
+///
+/// `run_id` 是 tab 标识：多 tab UI 下每个 tab 独占一个 run_id，所有
+/// IPC 事件按 run_id 分发到对应 tab slice。前端不传时兜底 DEFAULT_RUN_ID
+/// （单 tab 模式下兼容老调用路径）。
+///
+/// 多 tab 模式下，**不再**强行 stop 上一个 active_session：
+/// 每个 tab 独立运行，互不干扰；只有传入相同 run_id 时才会替换原有任务。
 #[tauri::command]
 pub fn start_agent(
     app: AppHandle,
@@ -35,20 +90,27 @@ pub fn start_agent(
     user_input_zh: String,
     cwd: Option<String>,
     agent: Option<String>,
+    run_id: Option<String>,
 ) -> Result<LaunchResult, String> {
     let cwd = cwd.unwrap_or_else(|| ".".to_string());
     let agent_type = agent
         .clone()
         .unwrap_or_else(|| "claude-code".to_string());
+    let run_id = run_id.unwrap_or_else(|| DEFAULT_RUN_ID.to_string());
 
     eprintln!(
-        "[galcode] start_agent: agent={agent_type} cwd={cwd} input_len={}",
+        "[galcode] start_agent: run_id={run_id} agent={agent_type} cwd={cwd} input_len={}",
         user_input_zh.len()
     );
 
+    // 如果同 run_id 还有未完成的会话，先停掉再重启（同 tab 内只能跑一个 turn）。
+    // 不同 run_id 的并发会话互不影响。
     let prev = {
         let mgr = state.manager.lock().map_err(|e| e.to_string())?;
-        mgr.active_session.clone()
+        mgr.sessions
+            .iter()
+            .find(|(_, sess)| sess.run_id == run_id)
+            .map(|(sid, _)| sid.clone())
     };
     if let Some(sid) = prev {
         let _ = manager::stop_session(
@@ -64,6 +126,7 @@ pub fn start_agent(
             app,
             Arc::clone(state.inner()),
             Arc::clone(runtime_state.inner()),
+            run_id,
             cwd,
             user_input_zh,
         ),
@@ -71,6 +134,7 @@ pub fn start_agent(
             app,
             Arc::clone(state.inner()),
             Arc::clone(runtime_state.inner()),
+            run_id,
             cwd,
             user_input_zh,
         ),
@@ -78,6 +142,7 @@ pub fn start_agent(
             app,
             Arc::clone(state.inner()),
             Arc::clone(runtime_state.inner()),
+            run_id,
             cwd,
             user_input_zh,
         ),
@@ -90,15 +155,29 @@ pub fn start_agent(
     result
 }
 
-/// `session_id` 省略时停止当前 `active_session`。
+/// 停止指定会话。
+///
+/// 优先级：`session_id` > `run_id` 反查会话 > active_session 兜底。
+/// 多 tab 模式下推荐传 `run_id`：从该 tab 的 sessions 里找当前 active 的会话停掉。
 #[tauri::command]
 pub fn stop_agent(
     app: AppHandle,
     state: State<Arc<AppState>>,
     runtime_state: State<Arc<RuntimeState>>,
     session_id: Option<String>,
+    run_id: Option<String>,
 ) -> Result<(), String> {
     let sid = session_id
+        .or_else(|| {
+            run_id.as_ref().and_then(|rid| {
+                state.manager.lock().ok().and_then(|mgr| {
+                    mgr.sessions
+                        .iter()
+                        .find(|(_, sess)| sess.run_id == *rid)
+                        .map(|(sid, _)| sid.clone())
+                })
+            })
+        })
         .or_else(|| {
             state
                 .manager
